@@ -1,0 +1,166 @@
+/* ─────────────────────────────────────────────────────────
+   Google Fonts — loaded LAST to avoid blocking CSS vars
+   Using 'preconnect' in layout.tsx is the correct way.
+   This @import is kept but moved below tailwind directives.
+───────────────────────────────────────────────────────── */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Load Google Fonts after Tailwind so PostCSS processes
+   @tailwind directives first — fixes Windows dev server issue */
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,600&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+/* ─────────────────────────────────────────────────────────
+   CSS CUSTOM PROPERTIES — Brand Design System
+───────────────────────────────────────────────────────── */
+:root {
+  /* Font families — fallbacks work even without Google Fonts */
+  --font-display: 'Cormorant Garamond', 'Georgia', 'Times New Roman', serif;
+  --font-body: 'DM Sans', 'Segoe UI', 'Helvetica Neue', Arial, system-ui, sans-serif;
+  --font-mono: 'DM Mono', 'Consolas', 'Courier New', monospace;
+
+  /* Brand Colors */
+  --gold: #c9a84c;
+  --gold-light: #e5c97d;
+  --gold-dark: #a07a28;
+  --cream: #f8f5f0;
+  --warm-white: #fdfcfa;
+  --charcoal: #1a1a1a;
+  --charcoal-soft: #2c2c2c;
+  --slate: #4a4a5a;
+  --muted: #8a8a9a;
+
+  /* Semantic tokens */
+  --bg: #fdfcfa;
+  --surface: #ffffff;
+  --border: #e8e4de;
+  --text: #1a1a1a;
+  --text-muted: #8a8a9a;
+}
+
+/* ─────────────────────────────────────────────────────────
+   BASE RESET
+───────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-family: var(--font-body);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg);
+}
+
+/* ─────────────────────────────────────────────────────────
+   SCROLLBAR
+───────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4c4a0;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gold);
+}
+
+/* ─────────────────────────────────────────────────────────
+   CHATBOT ANIMATIONS
+───────────────────────────────────────────────────────── */
+@keyframes bubbleIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.bubble-animate {
+  animation: bubbleIn 0.3s ease-out;
+}
+
+@keyframes typingDot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.typing-dot:nth-child(1) { animation: typingDot 1.2s ease-in-out infinite 0s; }
+.typing-dot:nth-child(2) { animation: typingDot 1.2s ease-in-out infinite 0.2s; }
+.typing-dot:nth-child(3) { animation: typingDot 1.2s ease-in-out infinite 0.4s; }
+
+@keyframes goldPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(201,168,76,0.4); }
+  50% { box-shadow: 0 0 0 12px rgba(201,168,76,0); }
+}
+
+.pulse-gold {
+  animation: goldPulse 2.5s ease-in-out infinite;
+}
+
+/* ─────────────────────────────────────────────────────────
+   CRM STATUS BADGES — @apply classes
+───────────────────────────────────────────────────────── */
+.status-new {
+  @apply bg-blue-50 text-blue-700 border border-blue-200;
+}
+.status-followup {
+  @apply bg-amber-50 text-amber-700 border border-amber-200;
+}
+.status-proposal {
+  @apply bg-purple-50 text-purple-700 border border-purple-200;
+}
+.status-negotiation {
+  @apply bg-orange-50 text-orange-700 border border-orange-200;
+}
+.status-confirmed {
+  @apply bg-green-50 text-green-700 border border-green-200;
+}
+.status-rejected {
+  @apply bg-red-50 text-red-700 border border-red-200;
+}
+.status-future {
+  @apply bg-gray-50 text-gray-700 border border-gray-200;
+}
+
+/* ─────────────────────────────────────────────────────────
+   CARD HOVER EFFECTS
+───────────────────────────────────────────────────────── */
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+}
+
+/* ─────────────────────────────────────────────────────────
+   GOLD ACCENT LINE
+───────────────────────────────────────────────────────── */
+.gold-line::before {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 2px;
+  background: var(--gold);
+  margin-bottom: 12px;
+}
