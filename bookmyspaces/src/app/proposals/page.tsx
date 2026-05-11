@@ -4,7 +4,7 @@ import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import {
   FileText, Sparkles, Eye, Send, ChevronDown, Plus, Trash2,
-  RefreshCw, CheckCircle, AlertCircle, Calculator
+  RefreshCw, CheckCircle, AlertCircle, Calculator, Download
 } from 'lucide-react'
 
 const VENUES = ['Monurama Rooftop', 'Monurama Banquet', 'Monurama Private Dining', 'Skyline Serenity']
@@ -391,15 +391,96 @@ function ProposalBuilderInner() {
                   <a href={`/api/proposals/${createdProposal.id}/preview`} target="_blank" rel="noopener noreferrer"
                     className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white"
                     style={{ background: '#0f1923' }}>
-                    <Eye size={14} /> Preview / Print
+                    <Eye size={14} /> Preview
                   </a>
-                  {createdProposal.leads?.phone && (
-                    <a href={`https://wa.me/91${createdProposal.leads.phone}?text=Hi! Your event proposal (${createdProposal.proposal_number}) is ready. Please check: ${window.location.origin}/api/proposals/${createdProposal.id}/preview`}
-                      target="_blank" rel="noopener noreferrer"
+                  {createdProposal.share_token && (
+                    <button
+                      onClick={() => {
+                        const url = `${window.location.origin}/proposal/share/${createdProposal.share_token}`
+                        navigator.clipboard.writeText(url).then(() => alert('Share link copied!')).catch(() => {
+                          prompt('Copy this link:', url)
+                        })
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm"
+                      style={{ border: '1px solid #c9a84c', color: '#a07a28', background: 'rgba(201,168,76,0.06)' }}>
+                      🔗 Copy Share Link
+                    </button>
+                  )}
+                  <a href={`/api/proposals/${createdProposal.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white"
+                    style={{ background: 'var(--gold-dark, #a07a28)' }}>
+                    <Download size={14} /> Download PDF
+                  </a>
+                  {(createdProposal.client_phone || createdProposal.leads?.phone) && (
+                    <button
+                      onClick={async () => {
+                        // Target: CLIENT's phone — not our own business number
+                        const clientPhone = (createdProposal.client_phone || createdProposal.leads?.phone || '')
+                          .replace(/\D/g, '')                   // strip non-digits
+                          .replace(/^91/, '')                    // remove 91 country code if present
+                        const appUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin
+                        const shareUrl = `${appUrl}/proposal/share/${createdProposal.share_token}`
+
+                        // Professional sales message — formatted for readability on mobile
+                        const clientName = createdProposal.client_name || createdProposal.leads?.name || ''
+                        const eventDate = createdProposal.event_date
+                          ? new Date(createdProposal.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+                          : ''
+
+                        const message = [
+                          `Hello ${clientName},`,
+                          '',
+                          'Thank you for choosing BookMySpaces 🌟',
+                          'Please find your event proposal below:',
+                          '',
+                          `📄 Proposal: *${createdProposal.proposal_number}*`,
+                          createdProposal.event_type ? `🎉 Event: ${createdProposal.event_type}` : '',
+                          eventDate ? `📅 Date: ${eventDate}` : '',
+                          createdProposal.total_price
+                            ? `💰 Total: *₹${createdProposal.total_price.toLocaleString('en-IN')}*`
+                            : '',
+                          '',
+                          `🔗 View Proposal: ${shareUrl}`,
+                          '',
+                          'Please reply *CONFIRM* to proceed with booking.',
+                          '',
+                          'Warm regards,',
+                          'BookMySpaces',
+                          '📞 9051459463 | www.bookmyspaces.in',
+                        ].filter(Boolean).join('\n')
+
+                        // Track delivery — non-blocking
+                        fetch('/api/proposals', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ id: createdProposal.id, action: 'whatsapp_sent' }),
+                        }).catch(() => {})
+
+                        // Open WhatsApp to CLIENT's number (desktop + mobile compatible)
+                        const waUrl = `https://wa.me/91${clientPhone}?text=${encodeURIComponent(message)}`
+                        window.open(waUrl, '_blank', 'noopener,noreferrer')
+                      }}
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white"
                       style={{ background: '#25D366' }}>
-                      <Send size={14} /> Send via WhatsApp
-                    </a>
+                      <Send size={14} /> Send Proposal on WhatsApp
+                    </button>
+                  )}
+                  {createdProposal.client_email && (
+                    <button
+                      onClick={async () => {
+                        const res = await fetch('/api/proposals/email', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ proposal_id: createdProposal.id }),
+                        })
+                        const data = await res.json()
+                        if (data.mailto_url) window.open(data.mailto_url, '_blank')
+                        else if (data.success) alert('Email sent successfully!')
+                      }}
+                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm"
+                      style={{ background: '#fff', border: '1px solid #e5e7eb', color: '#374151' }}>
+                      <Send size={14} /> Send via Email
+                    </button>
                   )}
                 </div>
               </div>
@@ -483,11 +564,62 @@ function ProposalBuilderInner() {
                           <span className="text-sm font-medium" style={{ color: 'var(--gold-dark)' }}>
                             ₹{p.total_price?.toLocaleString('en-IN')}
                           </span>
-                          <a href={`/api/proposals/${p.id}/preview`} target="_blank" rel="noopener noreferrer"
-                            className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
-                            style={{ border: '1px solid var(--border)', color: 'var(--slate)', background: 'var(--cream)' }}>
-                            <Eye size={10} /> View
-                          </a>
+                          <div className="flex gap-1 flex-wrap">
+                            <a href={`/api/proposals/${p.id}/preview`} target="_blank" rel="noopener noreferrer"
+                              className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
+                              style={{ border: '1px solid var(--border)', color: 'var(--slate)', background: 'var(--cream)' }}>
+                              <Eye size={10} /> View
+                            </a>
+                            <a href={`/api/proposals/${p.id}/pdf`} target="_blank" rel="noopener noreferrer"
+                              className="text-xs px-2 py-1 rounded-lg flex items-center gap-1 text-white"
+                              style={{ background: 'var(--gold-dark, #a07a28)' }}>
+                              <Download size={10} /> PDF
+                            </a>
+                            {(p.client_phone || p.share_token) && (
+                              <button
+                                onClick={() => {
+                                  // Use client_phone from proposal, fall back to lead's phone
+                                  const clientPhone = ((p.client_phone || p.leads?.phone || ''))
+                                    .replace(/\D/g, '').replace(/^91/, '')
+                                  if (!clientPhone) return
+                                  const appUrl = window.location.origin
+                                  const shareUrl = p.share_token
+                                    ? `${appUrl}/proposal/share/${p.share_token}`
+                                    : `${appUrl}/api/proposals/${p.id}/preview`
+                                  const eventDate = p.event_date
+                                    ? new Date(p.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+                                    : ''
+                                  const message = [
+                                    `Hello ${p.client_name || p.leads?.name || ''},`,
+                                    '',
+                                    'Thank you for choosing BookMySpaces 🌟',
+                                    'Please find your event proposal below:',
+                                    '',
+                                    `📄 Proposal: *${p.proposal_number}*`,
+                                    p.event_type ? `🎉 Event: ${p.event_type}` : '',
+                                    eventDate ? `📅 Date: ${eventDate}` : '',
+                                    p.total_price ? `💰 Total: *₹${p.total_price.toLocaleString('en-IN')}*` : '',
+                                    '',
+                                    `🔗 View Proposal: ${shareUrl}`,
+                                    '',
+                                    'Please reply *CONFIRM* to proceed with booking.',
+                                    '',
+                                    'Warm regards, BookMySpaces',
+                                    '📞 9051459463',
+                                  ].filter(Boolean).join('\n')
+                                  fetch('/api/proposals', {
+                                    method: 'PUT',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ id: p.id, action: 'whatsapp_sent' }),
+                                  }).catch(() => {})
+                                  window.open(`https://wa.me/91${clientPhone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
+                                }}
+                                className="text-xs px-2 py-1 rounded-lg flex items-center gap-1 text-white"
+                                style={{ background: '#25D366' }}>
+                                <Send size={10} /> WA
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )

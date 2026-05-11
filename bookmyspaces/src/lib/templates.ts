@@ -147,6 +147,35 @@ We look forward to making your celebration unforgettable! ✨
 Any questions? We're here. 😊`,
 
   // ── FOLLOW-UP ─────────────────────────────────────────
+  // ── PROPOSAL DELIVERY ────────────────────────────────
+  proposalReady: (name: string | undefined, proposalNumber: string, eventType: string | undefined, totalPrice: number | undefined, shareUrl: string) =>
+    `✨ Hello${name ? ` *${name}*` : ''}! Your event proposal is ready! 🎉
+
+📋 *Proposal ${proposalNumber}*
+${eventType ? `🎪 Event: ${eventType}
+` : ''}${totalPrice ? `💰 Package Value: *₹${totalPrice.toLocaleString('en-IN')}*
+` : ''}
+Please review your personalised proposal here:
+👉 ${shareUrl}
+
+To confirm your booking, simply reply *YES* or call us directly.
+
+📞 9051459463 | 9830509991
+🌐 www.bookmyspaces.in
+
+_This proposal is valid for 7 days. Weekend slots fill fast!_ 🗓`,
+
+  proposalFollowUp: (name: string | undefined, proposalNumber: string, shareUrl: string) =>
+    `Hi${name ? ` *${name}*` : ''}! 👋
+
+Just checking in on your proposal *${proposalNumber}* — have you had a chance to review it?
+
+👉 ${shareUrl}
+
+Happy to answer any questions or customise the package for you!
+
+📞 Call/WhatsApp: 9051459463`,
+
   followUp: (name?: string) =>
     `Hi${name ? ` ${name}` : ''}! 😊 
 

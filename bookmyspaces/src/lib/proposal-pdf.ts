@@ -314,8 +314,26 @@ export function generateProposalHTML(
   }
 
   @media print {
-    body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-    .no-print { display: none; }
+    @page {
+      size: A4;
+      margin: 0;
+    }
+
+    * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+
+    body {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      overflow: visible !important;
+    }
+
+    .no-print { display: none !important; }
+    .page { page-break-after: avoid; }
+    .section-block { page-break-inside: avoid; break-inside: avoid; }
   }
 </style>
 </head>

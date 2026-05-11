@@ -1,5 +1,6 @@
 export const dynamic = 'force-dynamic'
 import { logger } from '@/lib/logger'
+import { v4 as uuidv4 } from 'uuid'
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 import { generateProposalCoverNote } from '@/lib/scoring'
@@ -128,6 +129,7 @@ export async function POST(req: NextRequest) {
         inclusions,
         ai_cover_note,
         status: 'draft',
+        share_token: uuidv4().replace(/-/g, ''), // unique 32-char public share token
       })
       .select('*')
       .single()
@@ -187,5 +189,82 @@ export async function PATCH(req: NextRequest) {
   } catch (err) {
     logger.error('proposals', 'PATCH failed', err)
     return NextResponse.json({ error: 'Failed to update proposal' }, { status: 500 })
+  }
+}
+
+// ─────────────────────────────────────────
+// PUT /api/proposals — delivery tracking
+// Records view, whatsapp_sent, email_sent events
+// Called from share page on each view + from buttons on send
+// ─────────────────────────────────────────
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { id, token, action } = body // action: 'view' | 'whatsapp_sent' | 'email_sent'
+
+    if (!id && !token) {
+      return NextResponse.json({ error: 'id or token required' }, { status: 400 })
+    }
+
+    // Fetch proposal by token (public) or id (internal)
+    const { data: proposal, error: fetchErr } = token
+      ? await supabaseAdmin.from('proposals').select('id, status, share_view_count, lead_id, proposal_number, sent_at').eq('share_token', token).single()
+      : await supabaseAdmin.from('proposals').select('id, status, share_view_count, lead_id, proposal_number, sent_at').eq('id', id).single()
+
+    if (fetchErr || !proposal) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {}
+
+    if (action === 'view') {
+      updates.last_viewed_at = now
+      updates.share_view_count = (proposal.share_view_count || 0) + 1
+      // Auto-upgrade status sent → viewed
+      if (proposal.status === 'sent') {
+        updates.status = 'viewed'
+        updates.viewed_at = now
+      }
+    }
+
+    if (action === 'whatsapp_sent') {
+      updates.whatsapp_sent_at = now
+      if (proposal.status === 'draft') {
+        updates.status = 'sent'
+        updates.sent_at = now
+      }
+      // Log activity
+      if (proposal.lead_id) {
+        await supabaseAdmin.from('activity_logs').insert({
+          lead_id: proposal.lead_id,
+          action: 'proposal_whatsapp_sent',
+          description: `Proposal ${proposal.proposal_number} shared via WhatsApp`,
+          performed_by: 'admin',
+        })
+      }
+    }
+
+    if (action === 'email_sent') {
+      updates.email_sent_at = now
+      if (proposal.status === 'draft') {
+        updates.status = 'sent'
+        updates.sent_at = now
+      }
+      if (proposal.lead_id) {
+        await supabaseAdmin.from('activity_logs').insert({
+          lead_id: proposal.lead_id,
+          action: 'proposal_email_sent',
+          description: `Proposal ${proposal.proposal_number} shared via email`,
+          performed_by: 'admin',
+        })
+      }
+    }
+
+    await supabaseAdmin.from('proposals').update(updates).eq('id', proposal.id)
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    logger.error('proposals', 'Track event failed', err)
+    return NextResponse.json({ error: 'Tracking failed' }, { status: 500 })
   }
 }
