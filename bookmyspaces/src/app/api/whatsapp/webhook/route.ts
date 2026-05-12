@@ -6,10 +6,13 @@ import { syncLeadToSheets } from '@/lib/sheets'
 import { smartSend, isRateLimited } from '@/lib/queue'
 import { logger } from '@/lib/logger'
 
-const supabaseAdmin = getSupabaseAdmin()
-
+export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 30
+
+
+const supabaseAdmin = getSupabaseAdmin()
+
 
 // ─────────────────────────────────────────
 // ESCALATION TRIGGERS

@@ -18,10 +18,13 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets, initializeSheet } from '@/lib/sheets'
 import { logger } from '@/lib/logger'
 
-const supabaseAdmin = getSupabaseAdmin()
-
+export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 export const maxDuration = 30
+
+
+const supabaseAdmin = getSupabaseAdmin()
+
 
 // ─────────────────────────────────────────
 // POST /api/chat
