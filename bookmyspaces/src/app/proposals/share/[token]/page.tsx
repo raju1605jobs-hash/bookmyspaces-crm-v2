@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
+export const dynamic = 'force-dynamic'
+
 interface Props {
   params: {
     token: string;
