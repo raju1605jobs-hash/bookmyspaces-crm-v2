@@ -1,8 +1,10 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import Link from "next/link"
+import { notFound } from "next/navigation"
+import { getSupabase } from "@/lib/supabase"
 
-export const dynamic = 'force-dynamic'
+const supabase = getSupabase()
+
+export const dynamic = "force-dynamic"
 
 interface Props {
   params: {

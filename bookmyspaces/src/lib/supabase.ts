@@ -1,47 +1,26 @@
 import { createClient } from '@supabase/supabase-js'
 
-function getSupabaseConfig() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-  const supabaseServiceRoleKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY
+function requireEnv(name: string) {
+  const value = process.env[name]
 
-  if (!supabaseUrl) {
-    throw new Error('NEXT_PUBLIC_SUPABASE_URL is missing')
+  if (!value) {
+    throw new Error(`${name} is missing`)
   }
 
-  if (!supabaseAnonKey) {
-    throw new Error('NEXT_PUBLIC_SUPABASE_ANON_KEY is missing')
-  }
-
-  if (!supabaseServiceRoleKey) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY is missing')
-  }
-
-  return {
-    supabaseUrl,
-    supabaseAnonKey,
-    supabaseServiceRoleKey,
-  }
+  return value
 }
 
-const {
-  supabaseUrl,
-  supabaseAnonKey,
-  supabaseServiceRoleKey,
-} = getSupabaseConfig()
+export function getSupabase() {
+  return createClient(
+    requireEnv('NEXT_PUBLIC_SUPABASE_URL'),
+    requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY')
+  )
+}
 
-// Backward-compatible browser client
-export const supabase = createClient(
-  supabaseUrl,
-  supabaseAnonKey
-)
-
-// Factory admin client
 export function getSupabaseAdmin() {
   return createClient(
-    supabaseUrl,
-    supabaseServiceRoleKey,
+    requireEnv('NEXT_PUBLIC_SUPABASE_URL'),
+    requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
     {
       auth: {
         autoRefreshToken: false,
