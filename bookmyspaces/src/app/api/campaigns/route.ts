@@ -1,16 +1,15 @@
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 120
+
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { buildSegment, generateFestivalMessage, generateCampaignMessage, getUpcomingFestivals } from '@/lib/campaigns'
 
-const supabaseAdmin = getSupabaseAdmin()
-
-export const runtime = 'nodejs'
-export const maxDuration = 120
-
 // GET — list campaigns + upcoming festivals
 export async function GET(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const { searchParams } = new URL(req.url)
     const view = searchParams.get('view') || 'campaigns'
@@ -37,16 +36,17 @@ export async function GET(req: NextRequest) {
 
 // POST — create, preview, or send campaign
 export async function POST(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
     const {
-      action,           // 'preview' | 'generate_message' | 'create' | 'send' | 'generate_festival'
+      action,
       name,
       type,
       segment,
       message_template,
       template_name,
-      campaign_id,      // for 'send' action
+      campaign_id,
       festival,
       offer_details,
       context,
@@ -54,19 +54,16 @@ export async function POST(req: NextRequest) {
       dry_run = true,
     } = body
 
-    // ── GENERATE FESTIVAL MESSAGE ──────────────────
     if (action === 'generate_festival') {
       const msg = await generateFestivalMessage(festival || 'Festival', offer_details)
       return NextResponse.json({ message: msg })
     }
 
-    // ── GENERATE CUSTOM CAMPAIGN MESSAGE ──────────────
     if (action === 'generate_message') {
       const msg = await generateCampaignMessage(type || 'promotional', context || '', tone || 'warm')
       return NextResponse.json({ message: msg })
     }
 
-    // ── PREVIEW SEGMENT ───────────────────────────
     if (action === 'preview') {
       const recipients = await buildSegment(segment || {})
       return NextResponse.json({
@@ -75,7 +72,6 @@ export async function POST(req: NextRequest) {
       })
     }
 
-    // ── CREATE CAMPAIGN (draft) ────────────────────
     if (action === 'create') {
       const recipients = await buildSegment(segment || {})
 
@@ -97,7 +93,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ campaign }, { status: 201 })
     }
 
-    // ── SEND CAMPAIGN ─────────────────────────────
     if (action === 'send' && campaign_id) {
       const { data: campaign } = await supabaseAdmin
         .from('broadcast_campaigns')
@@ -117,13 +112,11 @@ export async function POST(req: NextRequest) {
         })
       }
 
-      // Mark as running
       await supabaseAdmin
         .from('broadcast_campaigns')
         .update({ status: 'running', sent_at: new Date().toISOString() })
         .eq('id', campaign_id)
 
-      // Send in background
       const broadcastRecipients = recipients.map(r => ({
         whatsappNumber: r.phone!,
         message: campaign.message_template,
@@ -131,7 +124,6 @@ export async function POST(req: NextRequest) {
 
       let sent = 0, failed = 0
 
-      // Send session messages (within 24h window)
       const { sendWhatsAppMessage } = await import('@/lib/whatsapp')
       for (const r of broadcastRecipients) {
         try {
@@ -161,6 +153,7 @@ export async function POST(req: NextRequest) {
 
 // PATCH — update campaign
 export async function PATCH(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
     const { id, ...updates } = body
