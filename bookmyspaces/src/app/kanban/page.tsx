@@ -5,10 +5,9 @@ import {
   RefreshCw, Phone, Calendar, Users, Star, ChevronRight,
   Plus, MoreVertical, Brain, Send
 , Clock, AlarmClock, FileText, Sparkles, Activity} from 'lucide-react'
-import { Lead, LeadStatus } from '@/lib/supabase'
 import { format, parseISO } from 'date-fns'
 
-const PIPELINE: Array<{ status: LeadStatus; label: string; color: string; bg: string }> = [
+const PIPELINE: Array<{ status: any; label: string; color: string; bg: string }> = [
   { status: 'new_inquiry',       label: 'New Inquiry',      color: '#2563eb', bg: '#eff6ff' },
   { status: 'followup_pending',  label: 'Follow-up',        color: '#d97706', bg: '#fffbeb' },
   { status: 'proposal_sent',     label: 'Proposal Sent',    color: '#7c3aed', bg: '#f5f3ff' },
@@ -18,10 +17,10 @@ const PIPELINE: Array<{ status: LeadStatus; label: string; color: string; bg: st
 ]
 
 export default function KanbanPage() {
-  const [leads, setLeads] = useState<Lead[]>([])
+  const [leads, setLeads] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [draggedId, setDraggedId] = useState<string | null>(null)
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [selectedLead, setSelectedLead] = useState<any | null>(null)
   const [leadContext, setLeadContext] = useState<{activities: any[], proposals: any[], summary: any} | null>(null)
   const [isLoadingContext, setIsLoadingContext] = useState(false)
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false)
@@ -45,7 +44,7 @@ export default function KanbanPage() {
 
   useEffect(() => { fetchLeads() }, [fetchLeads])
 
-  const updateStatus = async (id: string, status: LeadStatus) => {
+  const updateStatus = async (id: string, status: any) => {
     setLeads(prev => prev.map(l => l.id === id ? { ...l, status } : l))
     await fetch('/api/leads', {
       method: 'PATCH',
@@ -73,13 +72,13 @@ export default function KanbanPage() {
     }
   }
 
-  const leadsByStatus = (status: LeadStatus) =>
+  const leadsByStatus = (status: any) =>
     leads.filter(l => l.status === status)
       .sort((a, b) => (b.ai_score || b.lead_score || 5) - (a.ai_score || a.lead_score || 5))
 
   const handleDragStart = (id: string) => setDraggedId(id)
   const handleDragOver = (e: React.DragEvent) => e.preventDefault()
-  const handleDrop = (status: LeadStatus) => {
+  const handleDrop = (status: any) => {
     if (draggedId) updateStatus(draggedId, status)
     setDraggedId(null)
   }
@@ -172,7 +171,7 @@ export default function KanbanPage() {
         </div>
       </div>
 
-      {/* Lead Detail Panel */}
+      {/* any Detail Panel */}
       {selectedLead && (
         <>
           <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setSelectedLead(null)} />
@@ -191,7 +190,7 @@ export default function KanbanPage() {
                 <div className="mb-4 p-4 rounded-xl"
                   style={{ background: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.2)' }}>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs uppercase tracking-wider" style={{ color: 'var(--gold)' }}>AI Lead Score</span>
+                    <span className="text-xs uppercase tracking-wider" style={{ color: 'var(--gold)' }}>AI any Score</span>
                     <div className="flex gap-0.5">
                       {Array.from({ length: 10 }).map((_, i) => (
                         <div key={i} className="w-3 h-3 rounded-sm"
@@ -340,7 +339,7 @@ export default function KanbanPage() {
                     className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg disabled:opacity-50"
                     style={{ background: 'rgba(201,168,76,0.1)', color: 'var(--gold-dark)', border: '1px solid rgba(201,168,76,0.3)' }}>
                     {isGeneratingSummary ? <RefreshCw size={10} className="animate-spin" /> : <Sparkles size={10} />}
-                    {isGeneratingSummary ? 'Analysing...' : 'Analyse Lead'}
+                    {isGeneratingSummary ? 'Analysing...' : 'Analyse any'}
                   </button>
                 </div>
                 {leadContext?.summary && (
@@ -481,7 +480,7 @@ export default function KanbanPage() {
 function LeadCard({
   lead, accentColor, onDragStart, onClick
 }: {
-  lead: Lead
+  lead: any
   accentColor: string
   onDragStart: () => void
   onClick: () => void

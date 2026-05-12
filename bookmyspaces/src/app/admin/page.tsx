@@ -19,11 +19,6 @@ interface HealthStatus {
   checks: Record<string, { status: string; message: string }>
 }
 
-interface KnowledgeResult {
-  source: string
-  chunks: number
-}
-
 export default function AdminPage() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [isCheckingHealth, setIsCheckingHealth] = useState(false)
@@ -39,6 +34,7 @@ export default function AdminPage() {
 
   const checkHealth = async () => {
     setIsCheckingHealth(true)
+
     try {
       const res = await fetch('/api/health')
       const data = await res.json()
@@ -53,20 +49,27 @@ export default function AdminPage() {
   const seedKnowledge = async () => {
     setIsSeeding(true)
     setSeedResult(null)
+
     try {
       const res = await fetch('/api/knowledge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'seed_static' }),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'seed_static',
+        }),
       })
+
       const data = await res.json()
+
       if (data.success) {
         setSeedResult(`✅ ${data.message}`)
       } else {
         setSeedResult(`❌ Failed: ${data.error}`)
       }
-    } catch (err) {
-      setSeedResult('❌ Network error — check console')
+    } catch {
+      setSeedResult('❌ Network error')
     } finally {
       setIsSeeding(false)
     }
@@ -74,15 +77,19 @@ export default function AdminPage() {
 
   const addCustomText = async () => {
     if (!customText.trim() || !customSource.trim()) {
-      setAddResult('❌ Please provide both text content and a source name')
+      setAddResult('❌ Please provide both text content and source')
       return
     }
+
     setIsAddingText(true)
     setAddResult(null)
+
     try {
       const res = await fetch('/api/knowledge', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           action: 'add_text',
           text: customText,
@@ -91,7 +98,9 @@ export default function AdminPage() {
           name: customSource,
         }),
       })
+
       const data = await res.json()
+
       if (data.success) {
         setAddResult(`✅ ${data.message}`)
         setCustomText('')
@@ -109,145 +118,109 @@ export default function AdminPage() {
   const fetchKnowledge = async () => {
     const res = await fetch('/api/knowledge')
     const data = await res.json()
+
     setKnowledgeDocs(data.documents || [])
     setTotalChunks(data.total_chunks || 0)
   }
 
   return (
-    <div
-      className="min-h-screen"
-      style={{ background: 'var(--cream)', fontFamily: 'var(--font-body)' }}
-    >
-      {/* Nav */}
-      <nav
-        className="sticky top-0 z-40 px-6 py-4 flex items-center justify-between"
-        style={{
-          background: 'rgba(248,245,240,0.9)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
-        <div
-          className="text-xl font-light"
-          style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}
-        >
-          BookMySpaces <span className="text-sm" style={{ color: 'var(--gold)' }}>Admin</span>
-        </div>
-        <div className="flex items-center gap-2">
+    <div className="min-h-screen bg-[#f8f5f0] px-6 py-8">
+      <div className="max-w-5xl mx-auto space-y-8">
+
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-light text-[#1f2937]">
+              Admin Panel
+            </h1>
+            <p className="text-sm text-gray-500 mt-1">
+              System health, AI knowledge, and CRM tools
+            </p>
+          </div>
+
           <a
             href="/dashboard"
-            className="text-sm px-4 py-2 rounded-lg"
-            style={{ color: 'var(--slate)', border: '1px solid var(--border)', background: 'white' }}
+            className="px-4 py-2 rounded-lg border bg-white text-sm"
           >
             ← CRM Dashboard
           </a>
         </div>
-      </nav>
 
-      <div className="max-w-4xl mx-auto px-6 py-10 space-y-8">
-        <div>
-          <h1
-            className="text-3xl font-light"
-            style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}
-          >
-            Admin Panel
-          </h1>
-          <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-            System health, knowledge base management, and configuration
-          </p>
-        </div>
+        <div className="bg-white border rounded-2xl p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <Activity size={18} />
+            <h2 className="font-medium">System Health</h2>
+          </div>
 
-        {/* System Health */}
-        <AdminCard
-          title="System Health Check"
-          icon={<Activity size={18} style={{ color: 'var(--gold)' }} />}
-        >
           <button
             onClick={checkHealth}
             disabled={isCheckingHealth}
-            className="px-5 py-2.5 rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg, #0f1923, #1a2840)' }}
+            className="px-4 py-2 rounded-lg bg-black text-white text-sm flex items-center gap-2"
           >
-            {isCheckingHealth ? <Loader2 size={15} className="animate-spin" /> : <Activity size={15} />}
+            {isCheckingHealth ? (
+              <Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Activity size={15} />
+            )}
+
             Run Health Check
           </button>
 
           {health && (
-            <div className="mt-4 space-y-2">
-              <div
-                className={`text-sm font-medium px-3 py-2 rounded-lg ${
-                  health.status === 'healthy'
-                    ? 'bg-green-50 text-green-700'
-                    : 'bg-amber-50 text-amber-700'
-                }`}
-              >
-                System Status: {health.status.toUpperCase()}
-              </div>
-
+            <div className="space-y-2">
               {Object.entries(health.checks).map(([key, check]) => (
                 <div
                   key={key}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
-                  style={{ background: 'var(--cream)', border: '1px solid var(--border)' }}
+                  className="flex items-center justify-between border rounded-lg px-3 py-2 text-sm"
                 >
                   <div className="flex items-center gap-2">
                     {check.status === 'ok' ? (
                       <CheckCircle size={14} className="text-green-600" />
-                    ) : check.status === 'warning' ? (
-                      <AlertCircle size={14} className="text-amber-500" />
                     ) : (
                       <AlertCircle size={14} className="text-red-600" />
                     )}
-                    <span
-                      className="font-medium capitalize"
-                      style={{ color: 'var(--charcoal)' }}
-                    >
-                      {key.replace(/_/g, ' ')}
-                    </span>
+
+                    <span>{key}</span>
                   </div>
-                  <span style={{ color: 'var(--muted)' }}>{check.message}</span>
+
+                  <span className="text-gray-500">
+                    {check.message}
+                  </span>
                 </div>
               ))}
             </div>
           )}
-        </AdminCard>
+        </div>
 
-        {/* Knowledge Base Seeding */}
-        <AdminCard
-          title="Knowledge Base — Seed Business Data"
-          icon={<Brain size={18} style={{ color: 'var(--gold)' }} />}
-        >
-          <p className="text-sm mb-4" style={{ color: 'var(--slate)' }}>
-            This will load all built-in business knowledge (packages, FAQs, venues, policies,
-            dining info) into the vector database so the AI chatbot can answer accurately.
-            <br />
-            <strong>Run this once after setup, and again after updating any business info.</strong>
-          </p>
+        <div className="bg-white border rounded-2xl p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <Database size={18} />
+            <h2 className="font-medium">
+              Knowledge Base
+            </h2>
+          </div>
 
           <div className="flex gap-3">
             <button
               onClick={seedKnowledge}
               disabled={isSeeding}
-              className="px-5 py-2.5 rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-60"
-              style={{ background: 'linear-gradient(135deg, #c9a84c, #a07a28)' }}
+              className="px-4 py-2 rounded-lg bg-yellow-600 text-white text-sm flex items-center gap-2"
             >
               {isSeeding ? (
                 <>
                   <Loader2 size={15} className="animate-spin" />
-                  Seeding... (this takes ~30 seconds)
+                  Seeding...
                 </>
               ) : (
                 <>
                   <Database size={15} />
-                  Seed Static Business Knowledge
+                  Seed Static Knowledge
                 </>
               )}
             </button>
 
             <button
               onClick={fetchKnowledge}
-              className="px-4 py-2.5 rounded-lg text-sm flex items-center gap-2"
-              style={{ border: '1px solid var(--border)', color: 'var(--slate)', background: 'white' }}
+              className="px-4 py-2 rounded-lg border bg-white text-sm flex items-center gap-2"
             >
               <RefreshCw size={15} />
               View Knowledge
@@ -255,195 +228,98 @@ export default function AdminPage() {
           </div>
 
           {seedResult && (
-            <div
-              className={`mt-3 text-sm px-3 py-2 rounded-lg ${
-                seedResult.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-              }`}
-            >
+            <div className="text-sm">
               {seedResult}
             </div>
           )}
 
           {totalChunks !== null && (
-            <div className="mt-4 text-sm" style={{ color: 'var(--muted)' }}>
-              📊 {totalChunks} knowledge chunks indexed in vector database
+            <div className="text-sm text-gray-500">
+              {totalChunks} chunks indexed
             </div>
           )}
 
           {knowledgeDocs.length > 0 && (
-            <div className="mt-4 space-y-2">
-              {knowledgeDocs.map(doc => (
+            <div className="space-y-2">
+              {knowledgeDocs.map((doc: any) => (
                 <div
                   key={doc.id}
-                  className="flex items-center justify-between px-3 py-2 rounded-lg text-sm"
-                  style={{ background: 'var(--cream)', border: '1px solid var(--border)' }}
+                  className="flex items-center justify-between border rounded-lg px-3 py-2 text-sm"
                 >
                   <div className="flex items-center gap-2">
-                    <FileText size={13} style={{ color: 'var(--gold)' }} />
-                    <span style={{ color: 'var(--charcoal)' }}>{doc.name}</span>
-                    {doc.processed && (
-                      <CheckCircle size={13} className="text-green-600" />
-                    )}
+                    <FileText size={14} />
+                    <span>{doc.name}</span>
                   </div>
-                  <span style={{ color: 'var(--muted)' }}>{doc.chunk_count} chunks</span>
+
+                  <span className="text-gray-500">
+                    {doc.chunk_count} chunks
+                  </span>
                 </div>
               ))}
             </div>
           )}
-        </AdminCard>
-
-        {/* Add Custom Knowledge */}
-        <AdminCard
-          title="Add Custom Knowledge"
-          icon={<Upload size={18} style={{ color: 'var(--gold)' }} />}
-        >
-          <p className="text-sm mb-4" style={{ color: 'var(--slate)' }}>
-            Add any text content to the AI knowledge base. Paste menus, policies, new packages,
-            special offers, or any business info.
-          </p>
-
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                  Source Name (unique identifier)
-                </label>
-                <input
-                  type="text"
-                  value={customSource}
-                  onChange={e => setCustomSource(e.target.value)}
-                  placeholder="e.g. diwali_special_2026"
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)', color: 'var(--charcoal)' }}
-                />
-              </div>
-              <div>
-                <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                  Category
-                </label>
-                <select
-                  value={customCategory}
-                  onChange={e => setCustomCategory(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                  style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)', color: 'var(--charcoal)', background: 'white' }}
-                >
-                  <option value="packages">Packages</option>
-                  <option value="faq">FAQ</option>
-                  <option value="menu">Menu</option>
-                  <option value="policies">Policies</option>
-                  <option value="branding">Branding</option>
-                  <option value="scripts">Scripts</option>
-                  <option value="general">General</option>
-                </select>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                Content Text
-              </label>
-              <textarea
-                value={customText}
-                onChange={e => setCustomText(e.target.value)}
-                placeholder="Paste your text content here... menus, policies, new packages, etc."
-                rows={8}
-                className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
-                style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)', color: 'var(--charcoal)' }}
-              />
-            </div>
-
-            <button
-              onClick={addCustomText}
-              disabled={isAddingText}
-              className="px-5 py-2.5 rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-60"
-              style={{ background: 'linear-gradient(135deg, #0f1923, #1a2840)' }}
-            >
-              {isAddingText ? (
-                <>
-                  <Loader2 size={15} className="animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Upload size={15} />
-                  Add to Knowledge Base
-                </>
-              )}
-            </button>
-
-            {addResult && (
-              <div
-                className={`text-sm px-3 py-2 rounded-lg ${
-                  addResult.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-                }`}
-              >
-                {addResult}
-              </div>
-            )}
-          </div>
-        </AdminCard>
-
-        {/* Quick Links */}
-        <AdminCard
-          title="Quick Links"
-          icon={<Activity size={18} style={{ color: 'var(--gold)' }} />}
-        >
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'CRM Dashboard', href: '/dashboard', desc: 'View all leads & inquiries' },
-              { label: 'WhatsApp Business', href: 'https://wa.me/919051459463', desc: 'Open WhatsApp chat', external: true },
-              { label: 'Google Sheets', href: `https://docs.google.com/spreadsheets/d/${process.env.NEXT_PUBLIC_SHEETS_ID || 'YOUR_SHEET_ID'}`, desc: 'View synced leads', external: true },
-              { label: 'Health Check API', href: '/api/health', desc: 'Raw health status JSON', external: true },
-            ].map(link => (
-              <a
-                key={link.label}
-                href={link.href}
-                target={link.external ? '_blank' : undefined}
-                rel={link.external ? 'noopener noreferrer' : undefined}
-                className="block p-4 rounded-xl card-hover"
-                style={{ border: '1px solid var(--border)', background: 'white' }}
-              >
-                <div className="font-medium text-sm mb-1" style={{ color: 'var(--charcoal)' }}>
-                  {link.label} {link.external && '↗'}
-                </div>
-                <div className="text-xs" style={{ color: 'var(--muted)' }}>
-                  {link.desc}
-                </div>
-              </a>
-            ))}
-          </div>
-        </AdminCard>
-      </div>
-    </div>
-  )
-}
-
-function AdminCard({
-  title,
-  icon,
-  children,
-}: {
-  title: string
-  icon: React.ReactNode
-  children: React.ReactNode
-}) {
-  return (
-    <div
-      className="rounded-2xl p-6"
-      style={{ background: 'white', border: '1px solid var(--border)' }}
-    >
-      <div className="flex items-center gap-3 mb-5">
-        <div
-          className="w-9 h-9 rounded-lg flex items-center justify-center"
-          style={{ background: 'rgba(201,168,76,0.1)', border: '1px solid rgba(201,168,76,0.2)' }}
-        >
-          {icon}
         </div>
-        <h2 className="font-medium" style={{ color: 'var(--charcoal)' }}>
-          {title}
-        </h2>
+
+        <div className="bg-white border rounded-2xl p-6 space-y-4">
+          <div className="flex items-center gap-2">
+            <Upload size={18} />
+            <h2 className="font-medium">
+              Add Custom Knowledge
+            </h2>
+          </div>
+
+          <input
+            type="text"
+            value={customSource}
+            onChange={e => setCustomSource(e.target.value)}
+            placeholder="Source name"
+            className="w-full border rounded-lg px-3 py-2 text-sm"
+          />
+
+          <select
+            value={customCategory}
+            onChange={e => setCustomCategory(e.target.value)}
+            className="w-full border rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="general">General</option>
+            <option value="faq">FAQ</option>
+            <option value="packages">Packages</option>
+            <option value="menu">Menu</option>
+          </select>
+
+          <textarea
+            value={customText}
+            onChange={e => setCustomText(e.target.value)}
+            rows={8}
+            placeholder="Paste knowledge text..."
+            className="w-full border rounded-lg px-3 py-2 text-sm"
+          />
+
+          <button
+            onClick={addCustomText}
+            disabled={isAddingText}
+            className="px-4 py-2 rounded-lg bg-black text-white text-sm flex items-center gap-2"
+          >
+            {isAddingText ? (
+              <>
+                <Loader2 size={15} className="animate-spin" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Upload size={15} />
+                Add Knowledge
+              </>
+            )}
+          </button>
+
+          {addResult && (
+            <div className="text-sm">
+              {addResult}
+            </div>
+          )}
+        </div>
       </div>
-      {children}
     </div>
   )
 }

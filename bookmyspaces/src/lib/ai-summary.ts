@@ -4,8 +4,10 @@
 // ═══════════════════════════════════════════════════════════
 
 import Anthropic from '@anthropic-ai/sdk'
-import { supabaseAdmin } from './supabase'
+import { getSupabaseAdmin } from './supabase'
 import { smartSend } from './queue'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 let _anthropic: Anthropic | null = null
 function getAnthropic() {
@@ -248,7 +250,7 @@ export async function detectAndFlagVIPLeads(): Promise<number> {
     await supabaseAdmin.from('activity_logs').insert({
       lead_id: lead.id,
       action: 'vip_flagged',
-      description: `Lead flagged as VIP: ${reasons.join(', ')}`,
+      description: `any flagged as VIP: ${reasons.join(', ')}`,
       performed_by: 'ai_system',
     })
 

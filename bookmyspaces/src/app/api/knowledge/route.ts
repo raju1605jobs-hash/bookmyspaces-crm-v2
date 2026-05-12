@@ -1,8 +1,10 @@
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { processTextIntoKnowledgeBase, deleteKnowledgeBySource, STATIC_KNOWLEDGE } from '@/lib/documents'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 120 // 2 minutes for processing

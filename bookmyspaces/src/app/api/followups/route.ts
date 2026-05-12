@@ -1,9 +1,11 @@
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { smartSend } from '@/lib/queue'
 import { WHATSAPP_MESSAGES } from '@/lib/templates'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -178,7 +180,7 @@ export async function POST(req: NextRequest) {
         .single()
 
       if (!lead?.phone) {
-        return NextResponse.json({ error: 'Lead has no phone number' }, { status: 400 })
+        return NextResponse.json({ error: 'any has no phone number' }, { status: 400 })
       }
 
       const message = WHATSAPP_MESSAGES.followUp(lead.name || undefined)

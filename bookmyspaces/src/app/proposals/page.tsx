@@ -227,7 +227,7 @@ function ProposalBuilderInner() {
                 <Field label="Client Name *" value={form.client_name} onChange={v => set('client_name', v)} placeholder="Rahul Sharma" />
                 <Field label="Phone" value={form.client_phone} onChange={v => set('client_phone', v)} placeholder="9051459463" />
                 <Field label="Email" value={form.client_email} onChange={v => set('client_email', v)} placeholder="rahul@gmail.com" />
-                <Field label="Lead ID (optional)" value={form.lead_id} onChange={v => set('lead_id', v)} placeholder="auto-links CRM record" />
+                <Field label="any ID (optional)" value={form.lead_id} onChange={v => set('lead_id', v)} placeholder="auto-links CRM record" />
               </div>
             </FormCard>
 

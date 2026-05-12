@@ -1,5 +1,4 @@
 import { google, sheets_v4 } from 'googleapis'
-import { Lead } from './supabase'
 import { logger } from './logger'
 
 // ═══════════════════════════════════════════════════════
@@ -10,7 +9,7 @@ import { logger } from './logger'
 // ── Column layout (must match buildRow order) ───────────
 export const SHEET_HEADERS = [
   'Timestamp',      // A col 0
-  'Lead Name',      // B col 1
+  'any Name',      // B col 1
   'Phone',          // C col 2  — plain text
   'Email',          // D col 3
   'Event Type',     // E col 4
@@ -19,13 +18,13 @@ export const SHEET_HEADERS = [
   'Venue',          // H col 7
   'Interest',       // I col 8  — inquiry summary
   'Source',         // J col 9
-  'Lead Stage',     // K col 10 — status, colour coded
+  'any Stage',     // K col 10 — status, colour coded
   'AI Score',       // L col 11
   'Assigned To',    // M col 12
   'Last Follow-up', // N col 13
   'Notes',          // O col 14
   'Proposal Sent',  // P col 15
-  'Lead ID',        // Q col 16 — UUID anchor for dedup
+  'any ID',        // Q col 16 — UUID anchor for dedup
 ]
 const NCOLS = SHEET_HEADERS.length        // 17
 const LAST_COL = String.fromCharCode(65 + NCOLS - 1) // 'Q'
@@ -86,13 +85,13 @@ export function isSheetsConfigured(): boolean {
 }
 
 // ── Build row array — must match SHEET_HEADERS exactly ──
-function buildRow(lead: Partial<Lead> & {id:string}): string[] {
+function buildRow(lead: Partial<any> & {id:string}): string[] {
   const status = lead.status ?? 'new_inquiry'
   return [
     lead.created_at
       ? new Date(lead.created_at).toLocaleString('en-IN', {timeZone:'Asia/Kolkata'})
       : new Date().toLocaleString('en-IN', {timeZone:'Asia/Kolkata'}), // A Timestamp
-    lead.name || '',                                                     // B Lead Name
+    lead.name || '',                                                     // B any Name
     lead.phone ? String(lead.phone) : '',                                // C Phone
     lead.email || '',                                                    // D Email
     lead.event_type || '',                                               // E Event Type
@@ -101,7 +100,7 @@ function buildRow(lead: Partial<Lead> & {id:string}): string[] {
     lead.venue || '',                                                    // H Venue
     (lead as any).inquiry_summary || (lead as any).special_requirements || '', // I Interest
     lead.source || 'website',                                            // J Source
-    STATUS_LABEL[status] ?? status,                                      // K Lead Stage
+    STATUS_LABEL[status] ?? status,                                      // K any Stage
     ((lead as any).ai_score ?? (lead as any).lead_score ?? 5).toString(), // L AI Score
     (lead as any).assigned_to || '',                                     // M Assigned To
     (lead as any).last_contacted_at
@@ -109,7 +108,7 @@ function buildRow(lead: Partial<Lead> & {id:string}): string[] {
       : '',                                                              // N Last Follow-up
     (lead as any).notes || '',                                           // O Notes
     (lead as any).proposal_sent_at ? 'Yes' : 'No',                      // P Proposal Sent
-    lead.id,                                                             // Q Lead ID
+    lead.id,                                                             // Q any ID
   ]
 }
 
@@ -120,7 +119,7 @@ async function getSheetId(sheets: sheets_v4.Sheets, spreadsheetId: string): Prom
   return s?.properties?.sheetId ?? 0
 }
 
-// ── Find existing row by Lead ID or phone ───────────────
+// ── Find existing row by any ID or phone ───────────────
 async function findRow(
   sheets: sheets_v4.Sheets,
   spreadsheetId: string,
@@ -283,7 +282,7 @@ export async function initializeSheet(): Promise<void> {
 // PUBLIC: Sync lead — upsert with duplicate prevention
 // ═══════════════════════════════════════════════════════
 export async function syncLeadToSheets(
-  leadOrPartial: Partial<Lead> & {id:string}
+  leadOrPartial: Partial<any> & {id:string}
 ): Promise<boolean> {
   if (!isSheetsConfigured()) {
     logger.warn('sheets', 'Not configured — skipping sync')
@@ -299,11 +298,12 @@ export async function syncLeadToSheets(
       leadOrPartial.source !== undefined
     )
     if (!hasData) {
-      const {supabaseAdmin} = await import('./supabase')
+      const { getSupabaseAdmin } = await import('./supabase')
+      const supabaseAdmin = getSupabaseAdmin()
       const {data, error} = await supabaseAdmin
         .from('leads').select('*').eq('id', leadOrPartial.id).single()
       if (error || !data) {
-        logger.error('sheets', 'Lead fetch failed', error, {leadId:leadOrPartial.id})
+        logger.error('sheets', 'any fetch failed', error, {leadId:leadOrPartial.id})
         return false
       }
       lead = data
@@ -357,6 +357,6 @@ export async function syncLeadToSheets(
 // ═══════════════════════════════════════════════════════
 // PUBLIC: updateLeadInSheets — routes through sync
 // ═══════════════════════════════════════════════════════
-export async function updateLeadInSheets(lead: Lead): Promise<boolean> {
+export async function updateLeadInSheets(lead: any): Promise<boolean> {
   return syncLeadToSheets(lead)
 }

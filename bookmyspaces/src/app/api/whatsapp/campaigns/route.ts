@@ -1,9 +1,11 @@
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { logger } from '@/lib/logger'
 import { sendBroadcastCampaign, sendTemplateMessage } from '@/lib/whatsapp'
 import { APPROVED_TEMPLATES, TEMPLATE_PARAMS } from '@/lib/templates'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 120

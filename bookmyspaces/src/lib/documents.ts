@@ -1,6 +1,8 @@
-import { supabaseAdmin } from './supabase'
+import { getSupabaseAdmin } from './supabase'
 import { logger } from './logger'
 import { generateEmbedding, chunkText } from './ai'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 // ─────────────────────────────────────────
 // DOCUMENT PROCESSING — Build Knowledge Base

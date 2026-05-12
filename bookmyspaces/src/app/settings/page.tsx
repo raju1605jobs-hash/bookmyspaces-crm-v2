@@ -122,7 +122,7 @@ export default function SettingsPage() {
         </SettingCard>
 
         {/* VIP Detection */}
-        <SettingCard title="VIP Lead Detection" icon={<Star size={16} style={{ color: 'var(--gold)' }} />}>
+        <SettingCard title="VIP any Detection" icon={<Star size={16} style={{ color: 'var(--gold)' }} />}>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>Min AI Score for VIP</label>
@@ -143,8 +143,8 @@ export default function SettingsPage() {
           </div>
         </SettingCard>
 
-        {/* New Lead Alerts */}
-        <SettingCard title="New Lead Alerts" icon={<MessageSquare size={16} style={{ color: 'var(--gold)' }} />}>
+        {/* New any Alerts */}
+        <SettingCard title="New any Alerts" icon={<MessageSquare size={16} style={{ color: 'var(--gold)' }} />}>
           <Toggle label="WhatsApp alert on new website lead"
             value={settings.alert_new_lead_whatsapp === 'true'}
             onChange={v => set('alert_new_lead_whatsapp', v ? 'true' : 'false')} />

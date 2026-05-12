@@ -286,7 +286,7 @@ export default function AnalyticsPage() {
             <div className="rounded-2xl p-6" style={{ background: 'white', border: '1px solid var(--border)' }}>
               <h3 className="font-medium mb-5 flex items-center gap-2" style={{ color: 'var(--charcoal)' }}>
                 <ArrowUpRight size={16} style={{ color: 'var(--gold)' }} />
-                Lead Sources
+                any Sources
               </h3>
               <div className="grid grid-cols-2 gap-3">
                 {Object.entries(data.source_breakdown).map(([source, count]) => (

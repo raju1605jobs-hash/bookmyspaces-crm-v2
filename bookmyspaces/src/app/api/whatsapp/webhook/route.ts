@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isWatiConfigured, WatiWebhookPayload, WatiIncomingMessage, extractMessageText } from '@/lib/whatsapp'
 import { chatWithAI, extractLeadFromTag, extractLeadViaAI, mergeExtracted, cleanAIResponse, hasMinimumLeadData, sanitizeString, parseGuestCount, parseEventDate, Message } from '@/lib/ai'
-import { supabaseAdmin, ChatMessage } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets } from '@/lib/sheets'
 import { smartSend, isRateLimited } from '@/lib/queue'
 import { logger } from '@/lib/logger'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -110,8 +112,8 @@ async function handleIncomingMessage(
   const extracted = mergeExtracted(fromTag, fromAI)
 
   // ── Update conversation ──
-  const updatedMessages: ChatMessage[] = [
-    ...(existingConv?.messages as ChatMessage[] || []),
+  const updatedMessages = [
+   ...(existingConv?.messages || []),
     { role: 'user' as const, content: userText, timestamp: new Date().toISOString() },
     { role: 'assistant' as const, content: aiResponseClean, timestamp: new Date().toISOString() },
   ].slice(-40)
@@ -169,7 +171,7 @@ async function handleIncomingMessage(
         await supabaseAdmin.from('activity_logs').insert({
           lead_id: newLead.id,
           action: 'lead_created',
-          description: 'Lead created from WhatsApp',
+          description: 'any created from WhatsApp',
           performed_by: 'ai_chatbot',
         })
         syncLeadToSheets(newLead as any).catch(() => {})

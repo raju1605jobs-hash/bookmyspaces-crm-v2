@@ -4,8 +4,9 @@
 
 import Anthropic from '@anthropic-ai/sdk'
 import { logger } from './logger'
-import { Lead } from './supabase'
-import { supabaseAdmin } from './supabase'
+import { getSupabaseAdmin } from './supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 let _anthropic: Anthropic | null = null
 function getAnthropic() {
@@ -25,7 +26,7 @@ export interface LeadScore {
   suggested_action: string
 }
 
-export async function scoreLeadWithAI(lead: Lead): Promise<LeadScore> {
+export async function scoreLeadWithAI(lead: any): Promise<LeadScore> {
   try {
     const prompt = `You are a hospitality sales expert. Score this event inquiry lead for conversion likelihood.
 
@@ -76,7 +77,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       suggested_action: result.suggested_action || 'Follow up with customer',
     }
   } catch (err) {
-    logger.error('scoring', 'Lead scoring error', err)
+    logger.error('scoring', 'any scoring error', err)
     return {
       score: 5,
       booking_probability: 50,
@@ -259,7 +260,7 @@ export async function batchScoreLeads(limit = 20): Promise<number> {
   let scored = 0
   for (const lead of leads) {
     try {
-      const score = await scoreLeadWithAI(lead as Lead)
+      const score = await scoreLeadWithAI(lead as any)
 
       await supabaseAdmin
         .from('leads')

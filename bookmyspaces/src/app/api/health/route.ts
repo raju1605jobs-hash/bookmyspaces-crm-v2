@@ -1,7 +1,9 @@
 export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { initializeSheet, isSheetsConfigured } from '@/lib/sheets'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 

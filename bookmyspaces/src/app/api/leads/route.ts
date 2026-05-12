@@ -1,8 +1,10 @@
 export const dynamic = 'force-dynamic'
 import { logger } from '@/lib/logger'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin, LeadStatus } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets } from '@/lib/sheets'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
     await supabaseAdmin.from('activity_logs').insert({
       lead_id: lead.id,
       action: 'lead_created',
-      description: `Lead manually created from ${body.source || 'website'}`,
+      description: `any manually created from ${body.source || 'website'}`,
       performed_by: 'admin',
     })
 
@@ -103,7 +105,7 @@ export async function PATCH(req: NextRequest) {
     const { id, ...updates } = body
 
     if (!id) {
-      return NextResponse.json({ error: 'Lead ID required' }, { status: 400 })
+      return NextResponse.json({ error: 'any ID required' }, { status: 400 })
     }
 
     const { data: lead, error } = await supabaseAdmin

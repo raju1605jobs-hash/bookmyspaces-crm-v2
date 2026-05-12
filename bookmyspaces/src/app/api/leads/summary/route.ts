@@ -1,7 +1,9 @@
 export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -20,7 +22,7 @@ export async function POST(req: NextRequest) {
     ])
 
     const lead = leadRes.data
-    if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
+    if (!lead) return NextResponse.json({ error: 'any not found' }, { status: 404 })
 
     const convMessages = (convsRes.data || [])
       .flatMap((c: any) => (c.messages || []).slice(-20))

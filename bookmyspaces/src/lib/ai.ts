@@ -1,7 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
-import { supabaseAdmin } from './supabase'
+import { getSupabaseAdmin } from './supabase'
 import { logger } from './logger'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 // Lazy initialization — prevents build-time crashes
 let _anthropic: Anthropic | null = null

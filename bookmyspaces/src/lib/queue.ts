@@ -3,9 +3,11 @@
 // Works in mock mode when WhatsApp is not yet configured
 // ═══════════════════════════════════════════════════════════
 
-import { supabaseAdmin } from './supabase'
+import { getSupabaseAdmin } from './supabase'
 import { logger } from './logger'
 import { sendWhatsAppMessage, sendTemplateMessage, isWatiConfigured } from './whatsapp'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 // ─── QUEUE TABLE (optional — created in migration 002) ────
 export interface QueuedMessage {

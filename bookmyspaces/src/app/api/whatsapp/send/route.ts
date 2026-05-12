@@ -4,7 +4,9 @@ import { logger } from '@/lib/logger'
 import { sendWhatsAppMessage, sendTemplateMessage } from '@/lib/whatsapp'
 import { smartSend } from '@/lib/queue'
 import { WHATSAPP_MESSAGES } from '@/lib/templates'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 

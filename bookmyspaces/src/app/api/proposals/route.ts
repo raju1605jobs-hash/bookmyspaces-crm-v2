@@ -2,10 +2,12 @@ export const dynamic = 'force-dynamic'
 import { logger } from '@/lib/logger'
 import { v4 as uuidv4 } from 'uuid'
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { generateProposalCoverNote } from '@/lib/scoring'
 import { parseEventDate } from '@/lib/ai'
 import { generateProposalHTML } from '@/lib/proposal-pdf'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 30

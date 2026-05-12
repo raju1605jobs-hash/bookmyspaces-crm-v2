@@ -17,7 +17,6 @@ import {
   BarChart3,
   MessageSquare,
 } from 'lucide-react'
-import { Lead, LeadStatus } from '@/lib/supabase'
 import { format, parseISO } from 'date-fns'
 
 // Fallback used when lead.status is undefined, null, or an unknown value
@@ -37,7 +36,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; bg: string }
 const getStatus = (status: string | undefined | null) =>
   STATUS_CONFIG[status ?? ''] ?? STATUS_FALLBACK
 
-const ALL_STATUSES: LeadStatus[] = [
+const ALL_STATUSES = [
   'new_inquiry',
   'followup_pending',
   'proposal_sent',
@@ -48,12 +47,12 @@ const ALL_STATUSES: LeadStatus[] = [
 ]
 
 export default function DashboardPage() {
-  const [leads, setLeads] = useState<Lead[]>([])
+  const [leads, setLeads] = useState<any[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [selectedLead, setSelectedLead] = useState<any | null>(null)
   const [activeTab, setActiveTab] = useState<'list' | 'kanban' | 'stats'>('list')
 
   const fetchLeads = useCallback(async () => {
@@ -79,7 +78,7 @@ export default function DashboardPage() {
     fetchLeads()
   }, [fetchLeads])
 
-  const updateLeadStatus = async (id: string, status: LeadStatus) => {
+  const updateLeadStatus = async (id: string, status: any) => {
     await fetch('/api/leads', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -87,7 +86,7 @@ export default function DashboardPage() {
     })
     fetchLeads()
     if (selectedLead?.id === id) {
-      setSelectedLead(prev => prev ? { ...prev, status } : null)
+      setSelectedLead((prev: any) => prev ? { ...prev, status } : null)
     }
   }
 
@@ -393,7 +392,7 @@ export default function DashboardPage() {
                           value={lead.status}
                           onChange={e => {
                             e.stopPropagation()
-                            updateLeadStatus(lead.id, e.target.value as LeadStatus)
+                            updateLeadStatus(lead.id, e.target.value as any)
                           }}
                           onClick={e => e.stopPropagation()}
                           className="text-xs px-2 py-1 rounded-full font-medium outline-none"
@@ -443,7 +442,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Lead Detail Sidebar */}
+      {/* any Detail Sidebar */}
       {selectedLead && (
         <div
           className="fixed inset-y-0 right-0 w-full max-w-md z-50 overflow-y-auto shadow-2xl"
@@ -455,7 +454,7 @@ export default function DashboardPage() {
                 className="text-xl font-light"
                 style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}
               >
-                Lead Details
+                any Details
               </h2>
               <button
                 onClick={() => setSelectedLead(null)}
@@ -473,7 +472,7 @@ export default function DashboardPage() {
                 </label>
                 <select
                   value={selectedLead.status}
-                  onChange={e => updateLeadStatus(selectedLead.id, e.target.value as LeadStatus)}
+                  onChange={e => updateLeadStatus(selectedLead.id, e.target.value as any)}
                   className="w-full px-3 py-2 rounded-lg text-sm outline-none"
                   style={{
                     border: '1px solid var(--border)',

@@ -14,9 +14,11 @@ import {
   Message,
   ExtractedLeadData,
 } from '@/lib/ai'
-import { supabaseAdmin } from '@/lib/supabase'
+import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets, initializeSheet } from '@/lib/sheets'
 import { logger } from '@/lib/logger'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 export const runtime = 'nodejs'
 export const maxDuration = 30
@@ -194,7 +196,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── Lead upsert ───────────────────────────────────────
+    // ── any upsert ───────────────────────────────────────
     let leadId: string | null = existingLeadId
 
     if (hasLead) {
@@ -207,7 +209,7 @@ export async function POST(req: NextRequest) {
         currentConversationId,
         reqId
       )
-      logger.info('chat', `[${reqId}] Lead upsert complete`, { leadId })
+      logger.info('chat', `[${reqId}] any upsert complete`, { leadId })
     } else if (!existingLeadId && !leadId && currentConversationId && extracted) {
       // Case B: Have some signal (event_type/budget) but no name/phone yet
       // Create a minimal stub lead so the conversation is tracked in CRM
@@ -226,9 +228,9 @@ export async function POST(req: NextRequest) {
         .eq('id', currentConversationId)
 
       if (linkErr) {
-        logger.error('chat', `[${reqId}] Lead-conversation link failed`, linkErr)
+        logger.error('chat', `[${reqId}] any-conversation link failed`, linkErr)
       } else {
-        logger.debug('chat', `[${reqId}] Lead linked to conversation`, { leadId, conversationId: currentConversationId })
+        logger.debug('chat', `[${reqId}] any linked to conversation`, { leadId, conversationId: currentConversationId })
       }
     }
 
@@ -320,7 +322,7 @@ async function upsertLead(
         .eq('id', existingLeadId)
 
       if (error) {
-        logger.error('chat', `[${reqId}] Lead update failed`, error, { leadId: existingLeadId })
+        logger.error('chat', `[${reqId}] any update failed`, error, { leadId: existingLeadId })
         return existingLeadId // return ID even if update failed — lead exists
       }
 
@@ -426,7 +428,7 @@ async function upsertLead(
       .single()
 
     if (insertError) {
-      logger.error('chat', `[${reqId}] Lead INSERT failed`, insertError, {
+      logger.error('chat', `[${reqId}] any INSERT failed`, insertError, {
         hasPhone: !!phone,
         hasName: !!extracted.name,
         eventDate,
@@ -439,7 +441,7 @@ async function upsertLead(
     }
 
     if (!newLead) {
-      logger.error('chat', `[${reqId}] Lead insert returned no data`)
+      logger.error('chat', `[${reqId}] any insert returned no data`)
       return null
     }
 
@@ -453,7 +455,7 @@ async function upsertLead(
     supabaseAdmin.from('activity_logs').insert({
       lead_id: newLead.id,
       action: 'lead_created',
-      description: 'Lead auto-created from website chatbot',
+      description: 'any auto-created from website chatbot',
       performed_by: 'ai_chatbot',
       metadata: { conversation_id: conversationId, req_id: reqId },
     }).then(({ error }) => {

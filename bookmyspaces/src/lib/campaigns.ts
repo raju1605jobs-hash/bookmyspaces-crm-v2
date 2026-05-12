@@ -4,7 +4,9 @@
 // ═══════════════════════════════════════════════════════════
 
 import Anthropic from '@anthropic-ai/sdk'
-import { supabaseAdmin } from './supabase'
+import { getSupabaseAdmin } from './supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
 
 let _anthropic: Anthropic | null = null
 function getAnthropic() {

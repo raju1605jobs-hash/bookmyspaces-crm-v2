@@ -1,0 +1,22 @@
+
+> bookmyspaces-crm@1.0.0 build
+> next build
+
+  ▲ Next.js 14.2.5
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types ...
+Failed to compile.
+
+./src/lib/sheets.ts:301:14
+Type error: Property 'supabaseAdmin' does not exist on type 'typeof import("C:/rajubmp/bookmyspaces/src/lib/supabase")'.
+
+[0m [90m 299 |[39m     )[0m
+[0m [90m 300 |[39m     [36mif[39m ([33m![39mhasData) {[0m
+[0m[31m[1m>[22m[39m[90m 301 |[39m       [36mconst[39m {supabaseAdmin} [33m=[39m [36mawait[39m [36mimport[39m([32m'./supabase'[39m)[0m
+[0m [90m     |[39m              [31m[1m^[22m[39m[0m
+[0m [90m 302 |[39m       [36mconst[39m {data[33m,[39m error} [33m=[39m [36mawait[39m supabaseAdmin[0m
+[0m [90m 303 |[39m         [33m.[39m[36mfrom[39m([32m'leads'[39m)[33m.[39mselect([32m'*'[39m)[33m.[39meq([32m'id'[39m[33m,[39m leadOrPartial[33m.[39mid)[33m.[39msingle()[0m
+[0m [90m 304 |[39m       [36mif[39m (error [33m||[39m [33m![39mdata) {[0m
