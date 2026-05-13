@@ -1,28 +1,21 @@
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
-import { sendWhatsAppMessage, sendTemplateMessage } from '@/lib/whatsapp'
 import { smartSend } from '@/lib/queue'
 import { WHATSAPP_MESSAGES } from '@/lib/templates'
 import { getSupabaseAdmin } from '@/lib/supabase'
 
-const supabaseAdmin = getSupabaseAdmin()
-
-export const runtime = 'nodejs'
-
-// POST /api/whatsapp/send — Send a WhatsApp message to a lead
 export async function POST(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
     const { phone, message, lead_id, template, type = 'session' } = body
 
-    if (!phone) {
-      return NextResponse.json({ error: 'Phone number required' }, { status: 400 })
-    }
+    if (!phone) return NextResponse.json({ error: 'Phone number required' }, { status: 400 })
 
     let finalMessage = message
-
-    // Pre-built template messages
     if (template) {
       switch (template) {
         case 'greeting': finalMessage = WHATSAPP_MESSAGES.greeting(); break
@@ -36,31 +29,16 @@ export async function POST(req: NextRequest) {
         case 'dining': finalMessage = WHATSAPP_MESSAGES.privateDining(); break
         case 'skyline': finalMessage = WHATSAPP_MESSAGES.skylineRooms(); break
         case 'cafe': finalMessage = WHATSAPP_MESSAGES.cafeInfo(); break
-        default: break
       }
     }
 
-    if (!finalMessage) {
-      return NextResponse.json({ error: 'Message content required' }, { status: 400 })
-    }
+    if (!finalMessage) return NextResponse.json({ error: 'Message content required' }, { status: 400 })
 
     const success = await smartSend(phone, finalMessage, { type })
 
     if (success && lead_id) {
-      // Log activity
-      await supabaseAdmin.from('activity_logs').insert({
-        lead_id,
-        action: 'whatsapp_sent',
-        description: `WhatsApp message sent: "${finalMessage.substring(0, 100)}..."`,
-        performed_by: 'staff',
-        metadata: { template, phone },
-      })
-
-      // Update last_contacted_at
-      await supabaseAdmin
-        .from('leads')
-        .update({ last_contacted_at: new Date().toISOString() })
-        .eq('id', lead_id)
+      await supabaseAdmin.from('activity_logs').insert({ lead_id, action: 'whatsapp_sent', description: `WhatsApp message sent: "${finalMessage.substring(0, 100)}..."`, performed_by: 'staff', metadata: { template, phone } })
+      await supabaseAdmin.from('leads').update({ last_contacted_at: new Date().toISOString() }).eq('id', lead_id)
     }
 
     return NextResponse.json({ success, phone, message_preview: finalMessage.substring(0, 100) })

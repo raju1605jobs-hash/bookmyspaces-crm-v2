@@ -1,17 +1,15 @@
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 
-const supabaseAdmin = getSupabaseAdmin()
-
-export const runtime = 'nodejs'
-
-// GET /api/conversations — list conversations with optional filters
 export async function GET(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const { searchParams } = new URL(req.url)
-    const channel = searchParams.get('channel') // 'website' | 'whatsapp'
+    const channel = searchParams.get('channel')
     const leadId = searchParams.get('lead_id')
     const sessionId = searchParams.get('session_id')
     const limit = parseInt(searchParams.get('limit') || '20')
@@ -28,7 +26,6 @@ export async function GET(req: NextRequest) {
     if (sessionId) query = query.eq('session_id', sessionId)
 
     const { data, error, count } = await query
-
     if (error) throw error
 
     return NextResponse.json({ conversations: data, total: count })

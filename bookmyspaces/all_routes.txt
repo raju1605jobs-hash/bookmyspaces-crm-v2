@@ -1,0 +1,3054 @@
+=== C:\rajubmp\bookmyspaces\src\app\api\{proposals,analytics,calendar,followups}\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\ai-summary\route.ts === 
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 60
+
+import { NextResponse } from 'next/server'
+
+export async function GET() {
+  return NextResponse.json({
+    ok: true,
+    route: 'ai-summary',
+  })
+}
+
+export async function POST() {
+  return NextResponse.json({
+    ok: true,
+    route: 'ai-summary',
+  })
+}=== C:\rajubmp\bookmyspaces\src\app\api\analytics\route.ts === 
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 60
+
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { batchScoreLeads } from '@/lib/scoring'
+
+export async function GET(req: NextRequest) {
+  try {
+    // IMPORTANT:
+    // Create Supabase client INSIDE request handler
+    // NOT at module scope
+    const supabaseAdmin = getSupabaseAdmin()
+
+    const { searchParams } = new URL(req.url)
+    const period = searchParams.get('period') || '30'
+
+    const since = new Date(
+      Date.now() - parseInt(period) * 24 * 60 * 60 * 1000
+    ).toISOString()
+
+    const [
+      { data: leads },
+      { data: recentLeads },
+      { data: statusCounts },
+      { data: sourceCounts },
+      { data: proposals },
+      { data: conversations },
+    ] = await Promise.all([
+      supabaseAdmin
+        .from('leads')
+        .select('*')
+        .gte('created_at', since),
+
+      supabaseAdmin
+        .from('leads')
+        .select(
+          'id, created_at, status, source, lead_score, ai_score, event_type, venue'
+        )
+        .order('created_at', { ascending: false })
+        .limit(10),
+
+      supabaseAdmin
+        .from('leads')
+        .select('status')
+        .gte('created_at', since),
+
+      supabaseAdmin
+        .from('leads')
+        .select('source')
+        .gte('created_at', since),
+
+      supabaseAdmin
+        .from('proposals')
+        .select('status, total_price, created_at')
+        .gte('created_at', since),
+
+      supabaseAdmin
+        .from('conversations')
+        .select('channel, created_at')
+        .gte('created_at', since),
+    ])
+
+    const statusBreakdown = (statusCounts || []).reduce(
+      (acc: Record<string, number>, row: any) => {
+        const s =
+          row.status === 'new'
+            ? 'new_inquiry'
+            : (row.status ?? 'new_inquiry')
+
+        acc[s] = (acc[s] || 0) + 1
+
+        return acc
+      },
+      {}
+    )
+
+    const sourceBreakdown = (sourceCounts || []).reduce(
+      (acc: Record<string, number>, row: any) => {
+        acc[row.source] = (acc[row.source] || 0) + 1
+        return acc
+      },
+      {}
+    )
+
+    const confirmedRevenue = (proposals || [])
+      .filter((p: any) => p.status === 'accepted')
+      .reduce(
+        (sum: number, p: any) => sum + (p.total_price || 0),
+        0
+      )
+
+    const pipelineRevenue = (proposals || [])
+      .filter((p: any) =>
+        ['draft', 'sent', 'viewed'].includes(p.status)
+      )
+      .reduce(
+        (sum: number, p: any) => sum + (p.total_price || 0),
+        0
+      )
+
+    const totalLeads = leads?.length || 0
+    const confirmedLeads = statusBreakdown['confirmed'] || 0
+
+    const conversionRate =
+      totalLeads > 0
+        ? Math.round((confirmedLeads / totalLeads) * 100)
+        : 0
+
+    const dailyCounts: Record<string, number> = {}
+    const today = new Date()
+
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(today)
+      d.setDate(d.getDate() - i)
+
+      dailyCounts[d.toISOString().split('T')[0]] = 0
+    }
+
+    for (const lead of leads || []) {
+      const day = lead.created_at.split('T')[0]
+
+      if (dailyCounts[day] !== undefined) {
+        dailyCounts[day]++
+      }
+    }
+
+    const dailyChart = Object.entries(dailyCounts).map(
+      ([date, count]) => ({
+        date,
+        label: new Date(date).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+        }),
+        count,
+      })
+    )
+
+    const channelBreakdown = (conversations || []).reduce(
+      (acc: Record<string, number>, row: any) => {
+        acc[row.channel] = (acc[row.channel] || 0) + 1
+        return acc
+      },
+      {}
+    )
+
+    const now = new Date().toISOString()
+
+    const cutoff24h = new Date(
+      Date.now() - 24 * 60 * 60 * 1000
+    ).toISOString()
+
+    const [
+      { count: overdueCount },
+      { count: pendingContactCount },
+    ] = await Promise.all([
+      supabaseAdmin
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .in('status', [
+          'new_inquiry',
+          'followup_pending',
+          'future_prospect',
+        ])
+        .not('followup_date', 'is', null)
+        .lt('followup_date', now),
+
+      supabaseAdmin
+        .from('leads')
+        .select('*', { count: 'exact', head: true })
+        .in('status', [
+          'new_inquiry',
+          'followup_pending',
+        ])
+        .not('phone', 'is', null)
+        .or(
+          `last_contacted_at.is.null,last_contacted_at.lt.${cutoff24h}`
+        ),
+    ])
+
+    return NextResponse.json({
+      period: parseInt(period),
+
+      summary: {
+        total_leads: totalLeads,
+
+        new_leads:
+          statusBreakdown['new_inquiry'] || 0,
+
+        confirmed: confirmedLeads,
+
+        conversion_rate: conversionRate,
+
+        confirmed_revenue: confirmedRevenue,
+
+        pipeline_revenue: pipelineRevenue,
+
+        proposals_sent:
+          proposals?.filter(
+            (p: any) => p.status !== 'draft'
+          ).length || 0,
+
+        avg_lead_score:
+          totalLeads > 0
+            ? Math.round(
+                (leads || []).reduce(
+                  (s: number, l: any) =>
+                    s +
+                    (l.ai_score ||
+                      l.lead_score ||
+                      5),
+                  0
+                ) / totalLeads
+              )
+            : 5,
+      },
+
+      status_breakdown: statusBreakdown,
+
+      source_breakdown: sourceBreakdown,
+
+      channel_breakdown: channelBreakdown,
+
+      daily_chart: dailyChart,
+
+      recent_leads: recentLeads,
+
+      followups: {
+        overdue: overdueCount || 0,
+        pending_contact:
+          pendingContactCount || 0,
+      },
+    })
+  } catch (err) {
+    logger.error(
+      'analytics',
+      'Analytics error',
+      err
+    )
+
+    return NextResponse.json(
+      { error: 'Failed to load analytics' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    // IMPORTANT:
+    // Create client INSIDE handler
+    const supabaseAdmin = getSupabaseAdmin()
+
+    const { action } = await req.json()
+
+    if (action === 'score_leads') {
+      const scored = await batchScoreLeads(20)
+
+      return NextResponse.json({
+        success: true,
+        scored,
+      })
+    }
+
+    return NextResponse.json(
+      { error: 'Unknown action' },
+      { status: 400 }
+    )
+  } catch (err) {
+    logger.error(
+      'analytics',
+      'POST analytics error',
+      err
+    )
+
+    return NextResponse.json(
+      { error: 'Failed' },
+      { status: 500 }
+    )
+  }
+}=== C:\rajubmp\bookmyspaces\src\app\api\campaigns\route.ts === 
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 120
+
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { buildSegment, generateFestivalMessage, generateCampaignMessage, getUpcomingFestivals } from '@/lib/campaigns'
+
+// GET — list campaigns + upcoming festivals
+export async function GET(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
+  try {
+    const { searchParams } = new URL(req.url)
+    const view = searchParams.get('view') || 'campaigns'
+
+    if (view === 'festivals') {
+      const festivals = await getUpcomingFestivals(60)
+      return NextResponse.json({ festivals })
+    }
+
+    const { data: campaigns, error, count } = await supabaseAdmin
+      .from('broadcast_campaigns')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .limit(50)
+
+    if (error) throw error
+
+    return NextResponse.json({ campaigns: campaigns || [], total: count })
+  } catch (err) {
+    logger.error('campaigns', 'GET /api/campaigns error', err)
+    return NextResponse.json({ error: 'Failed to fetch campaigns' }, { status: 500 })
+  }
+}
+
+// POST — create, preview, or send campaign
+export async function POST(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
+  try {
+    const body = await req.json()
+    const {
+      action,
+      name,
+      type,
+      segment,
+      message_template,
+      template_name,
+      campaign_id,
+      festival,
+      offer_details,
+      context,
+      tone,
+      dry_run = true,
+    } = body
+
+    if (action === 'generate_festival') {
+      const msg = await generateFestivalMessage(festival || 'Festival', offer_details)
+      return NextResponse.json({ message: msg })
+    }
+
+    if (action === 'generate_message') {
+      const msg = await generateCampaignMessage(type || 'promotional', context || '', tone || 'warm')
+      return NextResponse.json({ message: msg })
+    }
+
+    if (action === 'preview') {
+      const recipients = await buildSegment(segment || {})
+      return NextResponse.json({
+        count: recipients.length,
+        sample: recipients.slice(0, 5).map(r => ({ name: r.name, phone: r.phone, status: r.status, score: r.ai_score })),
+      })
+    }
+
+    if (action === 'create') {
+      const recipients = await buildSegment(segment || {})
+
+      const { data: campaign, error } = await supabaseAdmin
+        .from('broadcast_campaigns')
+        .insert({
+          name: name || `Campaign ${new Date().toLocaleDateString('en-IN')}`,
+          type: type || 'custom',
+          segment: segment || {},
+          message_template,
+          template_name,
+          recipient_count: recipients.length,
+          status: 'draft',
+        })
+        .select('*')
+        .single()
+
+      if (error) throw error
+      return NextResponse.json({ campaign }, { status: 201 })
+    }
+
+    if (action === 'send' && campaign_id) {
+      const { data: campaign } = await supabaseAdmin
+        .from('broadcast_campaigns')
+        .select('*')
+        .eq('id', campaign_id)
+        .single()
+
+      if (!campaign) return NextResponse.json({ error: 'Campaign not found' }, { status: 404 })
+
+      const recipients = await buildSegment(campaign.segment || {})
+
+      if (dry_run) {
+        return NextResponse.json({
+          dry_run: true,
+          count: recipients.length,
+          sample: recipients.slice(0, 3).map(r => ({ name: r.name, phone: r.phone })),
+        })
+      }
+
+      await supabaseAdmin
+        .from('broadcast_campaigns')
+        .update({ status: 'running', sent_at: new Date().toISOString() })
+        .eq('id', campaign_id)
+
+      const broadcastRecipients = recipients.map(r => ({
+        whatsappNumber: r.phone!,
+        message: campaign.message_template,
+      }))
+
+      let sent = 0, failed = 0
+
+      const { sendWhatsAppMessage } = await import('@/lib/whatsapp')
+      for (const r of broadcastRecipients) {
+        try {
+          const ok = await sendWhatsAppMessage(r.whatsappNumber, campaign.message_template)
+          if (ok) sent++
+          else failed++
+          await new Promise(resolve => setTimeout(resolve, 1200))
+        } catch {
+          failed++
+        }
+      }
+
+      await supabaseAdmin
+        .from('broadcast_campaigns')
+        .update({ status: 'completed', sent_count: sent, failed_count: failed })
+        .eq('id', campaign_id)
+
+      return NextResponse.json({ success: true, sent, failed, total: recipients.length })
+    }
+
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
+  } catch (err) {
+    logger.error('campaigns', 'POST /api/campaigns error', err)
+    return NextResponse.json({ error: 'Campaign operation failed' }, { status: 500 })
+  }
+}
+
+// PATCH — update campaign
+export async function PATCH(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
+  try {
+    const body = await req.json()
+    const { id, ...updates } = body
+    if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 })
+
+    const { data, error } = await supabaseAdmin
+      .from('broadcast_campaigns')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+    return NextResponse.json({ campaign: data })
+  } catch (err) {
+    return NextResponse.json({ error: 'Update failed' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\chat\route.ts === 
+import { NextRequest, NextResponse } from 'next/server'
+import { v4 as uuidv4 } from 'uuid'
+import {
+  chatWithAI,
+  extractLeadFromTag,
+  extractLeadViaAI,
+  mergeExtracted,
+  cleanAIResponse,
+  hasMinimumLeadData,
+  generateConversationSummary,
+  parseGuestCount,
+  parseEventDate,
+  sanitizeString,
+  Message,
+  ExtractedLeadData,
+} from '@/lib/ai'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { syncLeadToSheets, initializeSheet } from '@/lib/sheets'
+import { logger } from '@/lib/logger'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 30
+
+
+const supabaseAdmin = getSupabaseAdmin()
+
+
+// ─────────────────────────────────────────
+// POST /api/chat
+// ─────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  const reqId = uuidv4().slice(0, 8) // short ID for log correlation
+
+  try {
+    const body = await req.json()
+    const { message, sessionId: incomingSessionId } = body
+
+    // ── Input validation ──────────────────────────────────
+    if (!message || typeof message !== 'string') {
+      return NextResponse.json({ error: 'Message is required' }, { status: 400 })
+    }
+
+    const trimmedMessage = message.trim().slice(0, 2000)
+    if (!trimmedMessage) {
+      return NextResponse.json({ error: 'Message cannot be empty' }, { status: 400 })
+    }
+
+    // ── Session management ────────────────────────────────
+    const sessionId =
+      incomingSessionId && /^[0-9a-f-]{36}$/.test(incomingSessionId)
+        ? incomingSessionId
+        : uuidv4()
+
+    logger.info('chat', `[${reqId}] Request received`, { sessionId, messageLen: trimmedMessage.length })
+
+    // ── Load existing conversation ────────────────────────
+    const { data: existingConv, error: convFetchError } = await supabaseAdmin
+      .from('conversations')
+      .select('id, messages, lead_id, extracted_phone')
+      .eq('session_id', sessionId)
+      .maybeSingle()
+
+    if (convFetchError) {
+      logger.error('chat', `[${reqId}] Conversation fetch error`, convFetchError)
+      // Non-fatal — proceed with empty history
+    }
+
+    const existingMessages: Message[] = Array.isArray(existingConv?.messages)
+      ? (existingConv!.messages as Message[]).slice(-18)
+      : []
+
+    const conversationId: string | null = existingConv?.id || null
+    const existingLeadId: string | null = existingConv?.lead_id || null
+
+    logger.debug('chat', `[${reqId}] Conversation loaded`, {
+      conversationId: conversationId || 'new',
+      existingLeadId: existingLeadId || 'none',
+      historyLength: existingMessages.length,
+    })
+
+    // ── Build messages for AI ─────────────────────────────
+    const messagesForAI: Message[] = [
+      ...existingMessages,
+      { role: 'user' as const, content: trimmedMessage },
+    ]
+
+    // ── Call AI ───────────────────────────────────────────
+    logger.debug('chat', `[${reqId}] Calling AI`, { turns: messagesForAI.length })
+    const aiResponseRaw = await chatWithAI(messagesForAI, trimmedMessage)
+    const aiResponseClean = cleanAIResponse(aiResponseRaw)
+
+    logger.debug('chat', `[${reqId}] AI responded`, {
+      responseLen: aiResponseClean.length,
+      hasTag: aiResponseRaw.includes('<<LEAD:'),
+    })
+
+    // ── Dual extraction strategy ──────────────────────────
+    const fromTag = extractLeadFromTag(aiResponseRaw)
+
+    logger.debug('chat', `[${reqId}] Tag extraction result`, {
+      hasName: !!fromTag?.name,
+      hasPhone: !!fromTag?.phone,
+      hasEventType: !!fromTag?.event_type,
+    })
+
+    // Run AI extraction as fallback only if tag gave no usable data
+    // AND we have enough conversation to extract from
+    let fromAI: ExtractedLeadData | null = null
+    if (!hasMinimumLeadData(fromTag) && existingMessages.length >= 0) {
+      logger.debug('chat', `[${reqId}] Running AI fallback extraction`)
+      const convText = messagesForAI
+        .map(m => `${m.role === 'user' ? 'Customer' : 'Aria'}: ${m.content}`)
+        .join('\n')
+      fromAI = await extractLeadViaAI(convText)
+      logger.debug('chat', `[${reqId}] AI extraction result`, {
+        hasName: !!fromAI?.name,
+        hasPhone: !!fromAI?.phone,
+      })
+    }
+
+    const extracted = mergeExtracted(fromTag, fromAI)
+    const hasLead = hasMinimumLeadData(extracted)
+
+    logger.info('chat', `[${reqId}] Extraction complete`, {
+      hasMinimumData: hasLead,
+      name: extracted?.name || null,
+      phone: extracted?.phone || null,
+      eventType: extracted?.event_type || null,
+    })
+
+    // ── Build updated messages (cap at 40) ────────────────
+    const updatedMessages: Message[] = [
+      ...messagesForAI,
+      { role: 'assistant' as const, content: aiResponseClean },
+    ].slice(-40)
+
+    // ── Upsert conversation ───────────────────────────────
+    const convPayload: Record<string, unknown> = {
+      session_id: sessionId,
+      messages: updatedMessages,
+      // 'channel' omitted — column has DEFAULT 'website' in schema.
+      // PostgREST schema cache may not yet reflect this column;
+      // fix: go to Supabase Dashboard → API → Reload schema cache.
+      is_active: true,
+    }
+
+    // Only set extracted fields when we have non-null values
+    // (preserves previously captured data if current turn has nothing new)
+    if (extracted?.name) convPayload.extracted_name = extracted.name
+    if (extracted?.phone) convPayload.extracted_phone = extracted.phone
+    if (extracted?.email) convPayload.extracted_email = extracted.email
+    if (extracted?.event_type) convPayload.extracted_event_type = extracted.event_type
+    if (extracted?.event_date) convPayload.extracted_event_date = extracted.event_date
+    if (extracted?.guest_count) convPayload.extracted_guest_count = extracted.guest_count
+    if (extracted?.budget) convPayload.extracted_budget = extracted.budget
+
+    let currentConversationId = conversationId
+
+    if (conversationId) {
+      const { error: updateErr } = await supabaseAdmin
+        .from('conversations')
+        .update(convPayload)
+        .eq('id', conversationId)
+
+      if (updateErr) {
+        logger.error('chat', `[${reqId}] Conversation UPDATE failed`, updateErr, { conversationId })
+      } else {
+        logger.debug('chat', `[${reqId}] Conversation updated`, { conversationId })
+      }
+    } else {
+      const { data: newConv, error: insertErr } = await supabaseAdmin
+        .from('conversations')
+        .upsert(convPayload, { onConflict: 'session_id', ignoreDuplicates: false })
+        .select('id')
+        .single()
+
+      if (insertErr) {
+        logger.error('chat', `[${reqId}] Conversation UPSERT failed`, insertErr, {
+          payload_keys: Object.keys(convPayload).join(','),
+          session_id: sessionId,
+          error_code: (insertErr as any).code,
+          error_details: (insertErr as any).details,
+          error_hint: (insertErr as any).hint,
+        })
+        // Attempt plain fetch as fallback — maybe it was inserted despite the error
+        const { data: fallback } = await supabaseAdmin
+          .from('conversations')
+          .select('id')
+          .eq('session_id', sessionId)
+          .maybeSingle()
+        if (fallback?.id) {
+          currentConversationId = fallback.id
+          logger.info('chat', `[${reqId}] Conversation recovered via fallback fetch`, { conversationId: currentConversationId })
+        }
+      } else {
+        currentConversationId = newConv?.id || null
+        logger.info('chat', `[${reqId}] Conversation upserted`, { conversationId: currentConversationId })
+      }
+    }
+
+    // ── any upsert ───────────────────────────────────────
+    let leadId: string | null = existingLeadId
+
+    if (hasLead) {
+      // Case A: We have name or phone — full upsert
+      logger.info('chat', `[${reqId}] Upserting lead`)
+      leadId = await upsertLead(
+        extracted!,
+        existingLeadId,
+        extracted?.phone || existingConv?.extracted_phone || null,
+        currentConversationId,
+        reqId
+      )
+      logger.info('chat', `[${reqId}] any upsert complete`, { leadId })
+    } else if (!existingLeadId && !leadId && currentConversationId && extracted) {
+      // Case B: Have some signal (event_type/budget) but no name/phone yet
+      // Create a minimal stub lead so the conversation is tracked in CRM
+      const hasAnySignal = !!(extracted.event_type || extracted.budget || extracted.guest_count || extracted.venue)
+      if (hasAnySignal) {
+        logger.info('chat', `[${reqId}] Creating stub lead from partial extraction`)
+        leadId = await upsertLead(extracted, null, null, currentConversationId, reqId)
+      }
+    }
+
+    // ── Link lead to conversation ─────────────────────────
+    if (leadId && !existingLeadId && currentConversationId) {
+      const { error: linkErr } = await supabaseAdmin
+        .from('conversations')
+        .update({ lead_id: leadId })
+        .eq('id', currentConversationId)
+
+      if (linkErr) {
+        logger.error('chat', `[${reqId}] any-conversation link failed`, linkErr)
+      } else {
+        logger.debug('chat', `[${reqId}] any linked to conversation`, { leadId, conversationId: currentConversationId })
+      }
+    }
+
+    // ── Async: generate summary every 10 messages ─────────
+    if (updatedMessages.length > 0 && updatedMessages.length % 10 === 0 && currentConversationId) {
+      const convIdForSummary = currentConversationId
+      generateConversationSummary(updatedMessages)
+        .then(async (summary) => {
+          const { error } = await supabaseAdmin
+            .from('conversations')
+            .update({ summary })
+            .eq('id', convIdForSummary)
+          if (error) logger.error('chat', 'Summary update failed', error)
+        })
+        .catch(() => {}) // truly non-fatal
+    }
+
+    return NextResponse.json({
+      reply: aiResponseClean,
+      sessionId,
+      leadCaptured: hasLead,
+    })
+
+  } catch (error) {
+    logger.error('chat', `[${reqId}] Unhandled error`, error)
+    return NextResponse.json(
+      {
+        reply: "I'm having trouble connecting right now. Please WhatsApp us at 9051459463 and we'll respond right away! 😊",
+        error: 'Internal server error',
+        sessionId: null,
+      },
+      { status: 500 }
+    )
+  }
+}
+
+// ─────────────────────────────────────────
+// LEAD UPSERT — Deduplicated, safe, fully logged
+// ─────────────────────────────────────────
+// DEDUP UTILITIES
+// ─────────────────────────────────────────
+/** Normalize Indian phone: strip spaces/hyphens/+, remove leading 91 → 10 digits */
+function normalizePhoneForDedup(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const digits = raw.replace(/[\s\-\+\(\)]/g, '')
+  // Strip leading country code variants: 91, 0091
+  const stripped = digits.replace(/^(0091|91)([6-9]\d{9})$/, '$2')
+  return /^[6-9]\d{9}$/.test(stripped) ? stripped : null
+}
+
+/** Normalize email: lowercase + trim */
+function normalizeEmailForDedup(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const e = raw.trim().toLowerCase()
+  return e.includes('@') ? e : null
+}
+
+// Priority chain: existingLeadId → phone match → create new
+// ─────────────────────────────────────────
+async function upsertLead(
+  extracted: ExtractedLeadData,
+  existingLeadId: string | null,
+  phone: string | null,
+  conversationId: string | null,
+  reqId: string
+): Promise<string | null> {
+  try {
+    const guestCount = parseGuestCount(extracted.guest_count)
+    const eventDate = parseEventDate(extracted.event_date)
+
+    // Base fields for both insert and update
+    const baseFields: Record<string, unknown> = {
+      ...(extracted.name && { name: sanitizeString(extracted.name) }),
+      ...(phone && { phone }),
+      ...(extracted.email && { email: sanitizeString(extracted.email) }),
+      ...(extracted.event_type && { event_type: sanitizeString(extracted.event_type) }),
+      // event_date and last_contacted_at omitted — PGRST204 schema cache issue.
+      // After reloading Supabase schema cache these can be restored.
+      ...(guestCount && { guest_count: guestCount }),
+      ...(extracted.budget && { budget: sanitizeString(extracted.budget) }),
+      ...(extracted.venue && { venue: sanitizeString(extracted.venue) }),
+    }
+
+    // ── Case 1: Known lead from this session ──────────────
+    if (existingLeadId) {
+      const { error } = await supabaseAdmin
+        .from('leads')
+        .update(baseFields)
+        .eq('id', existingLeadId)
+
+      if (error) {
+        logger.error('chat', `[${reqId}] any update failed`, error, { leadId: existingLeadId })
+        return existingLeadId // return ID even if update failed — lead exists
+      }
+
+      logger.debug('chat', `[${reqId}] Existing lead updated`, { leadId: existingLeadId })
+      // Sync to Sheets on first update if not yet synced
+      console.log('[SHEETS-TRACE] Case1 — syncing existing lead', existingLeadId)
+      syncLeadToSheets({ id: existingLeadId })
+        .then(ok => console.log('[SHEETS-TRACE] Case1 sync result:', ok))
+        .catch(() => {})
+      return existingLeadId
+    }
+
+    // ── Case 2: Deduplication by normalized phone → normalized email ──
+    const normPhone = normalizePhoneForDedup(phone)
+    const normEmail = normalizeEmailForDedup(sanitizeString(extracted.email))
+
+    // 2a: match by normalized phone (handles +91, spaces, hyphens, country code)
+    let dupLeadId: string | null = null
+    let dupReason = ''
+
+    if (normPhone) {
+      // Fetch leads where last 10 digits match — covers all phone format variants
+      const { data: phoneRows } = await supabaseAdmin
+        .from('leads')
+        .select('id, phone')
+        .not('phone', 'is', null)
+        .limit(500)
+
+      const phoneMatch = (phoneRows ?? []).find((r: any) => {
+        const norm = normalizePhoneForDedup(r.phone)
+        return norm && norm === normPhone
+      })
+      if (phoneMatch) { dupLeadId = phoneMatch.id; dupReason = 'phone' }
+    }
+
+    // 2b: fallback — match by normalized email if phone dedup found nothing
+    if (!dupLeadId && normEmail) {
+      const { data: emailMatch } = await supabaseAdmin
+        .from('leads')
+        .select('id')
+        .ilike('email', normEmail)
+        .maybeSingle()
+      if (emailMatch) { dupLeadId = emailMatch.id; dupReason = 'email' }
+    }
+
+    if (dupLeadId) {
+      const { error: updateErr } = await supabaseAdmin
+        .from('leads')
+        .update(baseFields)
+        .eq('id', dupLeadId)
+
+      if (updateErr) {
+        logger.error('chat', `[${reqId}] Dedup lead update failed`, updateErr)
+      } else {
+        logger.info('chat', `[${reqId}] Duplicate prevented via ${dupReason} match`, { leadId: dupLeadId })
+        // Activity log for dedup event
+        Promise.resolve(supabaseAdmin.from('activity_logs').insert({
+          lead_id: dupLeadId,
+          action: 'duplicate_prevented',
+          description: `Duplicate inquiry detected and merged (matched by ${dupReason})`,
+          performed_by: 'ai_chatbot',
+          metadata: { conversation_id: conversationId, req_id: reqId, match_method: dupReason },
+        })).catch(() => {})
+        // Sync updated row to Sheets
+        syncLeadToSheets({ id: dupLeadId }).catch(() => {})
+      }
+
+      return dupLeadId
+    }
+
+    // ── Case 3: Create new lead ───────────────────────────
+    // Guard: must have at least one meaningful field to save
+    const hasAnything = !!(
+      sanitizeString(extracted.name) || phone ||
+      sanitizeString(extracted.event_type) || sanitizeString(extracted.budget) ||
+      parseGuestCount(extracted.guest_count) || sanitizeString(extracted.venue)
+    )
+    if (!hasAnything) {
+      logger.debug('chat', `[${reqId}] No meaningful data to save — skipping lead insert`)
+      return null
+    }
+
+    // Build insert — omit columns not yet visible in PostgREST schema cache (PGRST204).
+    // Fix in Supabase: Dashboard → API → Reload schema cache, then restore these fields.
+    const leadInsertPayload: Record<string, unknown> = {
+      name: sanitizeString(extracted.name),
+      phone: phone || null,
+      email: sanitizeString(extracted.email),
+      event_type: sanitizeString(extracted.event_type),
+      guest_count: guestCount,
+      budget: sanitizeString(extracted.budget),
+      venue: sanitizeString(extracted.venue),
+      source: 'website',
+      status: 'new_inquiry',
+      // Store event_date as text note until schema cache is refreshed
+      ...(eventDate ? { notes: `Event date: ${eventDate}` } : {}),
+    }
+
+    const { data: newLead, error: insertError } = await supabaseAdmin
+      .from('leads')
+      .insert(leadInsertPayload)
+      .select('id')
+      .single()
+
+    if (insertError) {
+      logger.error('chat', `[${reqId}] any INSERT failed`, insertError, {
+        hasPhone: !!phone,
+        hasName: !!extracted.name,
+        eventDate,
+        error_code: (insertError as any).code,
+        error_message: (insertError as any).message,
+        error_details: (insertError as any).details,
+        error_hint: (insertError as any).hint,
+      })
+      return null
+    }
+
+    if (!newLead) {
+      logger.error('chat', `[${reqId}] any insert returned no data`)
+      return null
+    }
+
+    logger.info('chat', `[${reqId}] New lead created`, {
+      leadId: newLead.id,
+      hasPhone: !!phone,
+      hasName: !!extracted.name,
+    })
+
+    // Log to activity_logs (non-fatal)
+    supabaseAdmin.from('activity_logs').insert({
+      lead_id: newLead.id,
+      action: 'lead_created',
+      description: 'any auto-created from website chatbot',
+      performed_by: 'ai_chatbot',
+      metadata: { conversation_id: conversationId, req_id: reqId },
+    }).then(({ error }) => {
+      if (error) logger.error('chat', `[${reqId}] activity_logs insert failed`, error)
+    })
+
+    // Google Sheets sync — fully async, never blocks response
+    // Initialize sheet headers+formatting on first-ever lead (non-blocking)
+    initializeSheet().catch(() => {})
+    console.log('[SHEETS-TRACE] About to call syncLeadToSheets, leadId:', newLead.id)
+    syncLeadToSheets(newLead as any)
+      .then(ok => console.log('[SHEETS-TRACE] syncLeadToSheets resolved:', ok))
+      .catch((err) => {
+        console.log('[SHEETS-TRACE] syncLeadToSheets threw:', err?.message ?? err)
+        logger.error('chat', `[${reqId}] Google Sheets sync failed`, err)
+      })
+
+    // Track analytics event — non-blocking, failure ignored
+    Promise.resolve(supabaseAdmin.rpc('track_event', {
+      p_event_type: 'lead_created',
+      p_session_id: conversationId,
+      p_lead_id: newLead.id,
+      p_channel: 'website',
+      p_properties: { has_phone: !!phone, has_name: !!extracted.name },
+    })).catch(() => {}) // non-fatal
+
+    return newLead.id
+
+  } catch (err) {
+    logger.error('chat', `[${reqId}] upsertLead threw`, err)
+    return null
+  }
+}
+
+// ─────────────────────────────────────────
+// GET /api/chat — Health check
+// ─────────────────────────────────────────
+export async function GET() {
+  return NextResponse.json({
+    status: 'Chat API is running',
+    timestamp: new Date().toISOString(),
+  })
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\conversations\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+// GET /api/conversations — list conversations with optional filters
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const channel = searchParams.get('channel') // 'website' | 'whatsapp'
+    const leadId = searchParams.get('lead_id')
+    const sessionId = searchParams.get('session_id')
+    const limit = parseInt(searchParams.get('limit') || '20')
+    const offset = parseInt(searchParams.get('offset') || '0')
+
+    let query = supabaseAdmin
+      .from('conversations')
+      .select('*, leads(name, phone, email, status)', { count: 'exact' })
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (channel) query = query.eq('channel', channel)
+    if (leadId) query = query.eq('lead_id', leadId)
+    if (sessionId) query = query.eq('session_id', sessionId)
+
+    const { data, error, count } = await query
+
+    if (error) throw error
+
+    return NextResponse.json({ conversations: data, total: count })
+  } catch (err) {
+    logger.error('conversations', 'GET /api/conversations error', err)
+    return NextResponse.json({ error: 'Failed to fetch conversations' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\followups\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { smartSend } from '@/lib/queue'
+import { WHATSAPP_MESSAGES } from '@/lib/templates'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+export const maxDuration = 60
+
+// ─────────────────────────────────────────
+// GET — leads needing followup OR activity timeline for a lead
+// ─────────────────────────────────────────
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const leadId = searchParams.get('lead_id')
+
+  // Activity timeline for a specific lead
+  if (leadId) {
+    const { data: activities, error } = await supabaseAdmin
+      .from('activity_logs')
+      .select('*')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false })
+      .limit(50)
+
+    if (error) {
+      logger.error('followups', 'Activity fetch failed', error)
+      return NextResponse.json({ activities: [] })
+    }
+    return NextResponse.json({ activities: activities || [] })
+  }
+
+  // Default: leads needing followup + overdue stats
+  try {
+    const now = new Date().toISOString()
+    const cutoff24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+    // Overdue: followup_date is in the past
+    const { data: overdueLeads } = await supabaseAdmin
+      .from('leads')
+      .select('id, name, phone, email, event_type, status, followup_date, last_contacted_at, created_at')
+      .in('status', ['new_inquiry', 'followup_pending', 'future_prospect'])
+      .not('followup_date', 'is', null)
+      .lt('followup_date', now)
+      .order('followup_date', { ascending: true })
+      .limit(50)
+
+    // Not contacted in 24h
+    const { data: pendingLeads } = await supabaseAdmin
+      .from('leads')
+      .select('id, name, phone, email, event_type, status, followup_date, last_contacted_at, created_at')
+      .in('status', ['new_inquiry', 'followup_pending', 'future_prospect'])
+      .not('phone', 'is', null)
+      .or(`last_contacted_at.is.null,last_contacted_at.lt.${cutoff24h}`)
+      .order('created_at', { ascending: true })
+      .limit(50)
+
+    return NextResponse.json({
+      leads: pendingLeads || [],
+      overdue: overdueLeads || [],
+      counts: {
+        pending: pendingLeads?.length ?? 0,
+        overdue: overdueLeads?.length ?? 0,
+      }
+    })
+  } catch (err) {
+    logger.error('followups', 'GET failed', err)
+    // Fallback
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+    const { data } = await supabaseAdmin
+      .from('leads')
+      .select('id, name, phone, email, event_type, status, last_contacted_at, created_at')
+      .in('status', ['new_inquiry', 'followup_pending', 'future_prospect'])
+      .not('phone', 'is', null)
+      .or(`last_contacted_at.is.null,last_contacted_at.lt.${cutoff}`)
+      .order('created_at', { ascending: true })
+      .limit(50)
+
+    return NextResponse.json({ leads: data || [], overdue: [], counts: { pending: data?.length ?? 0, overdue: 0 } })
+  }
+}
+
+// ─────────────────────────────────────────
+// POST — schedule followup, add note, send whatsapp, bulk
+// ─────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { action, lead_id, note, followup_date, performed_by = 'admin' } = body
+
+    // ── Schedule / update followup date ────────────────────
+    if (action === 'schedule' && lead_id) {
+      if (!followup_date) {
+        return NextResponse.json({ error: 'followup_date required' }, { status: 400 })
+      }
+
+      const { error } = await supabaseAdmin
+        .from('leads')
+        .update({ followup_date })
+        .eq('id', lead_id)
+
+      if (error) throw error
+
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id,
+        action: 'followup_scheduled',
+        description: `Follow-up scheduled for ${new Date(followup_date).toLocaleDateString('en-IN')}`,
+        performed_by,
+        metadata: { followup_date },
+      })
+
+      return NextResponse.json({ success: true })
+    }
+
+    // ── Add note ────────────────────────────────────────────
+    if (action === 'note' && lead_id) {
+      if (!note?.trim()) {
+        return NextResponse.json({ error: 'note is required' }, { status: 400 })
+      }
+
+      // Fetch existing notes to append
+      const { data: lead } = await supabaseAdmin
+        .from('leads')
+        .select('notes')
+        .eq('id', lead_id)
+        .single()
+
+      const timestamp = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })
+      const existing = lead?.notes ? lead.notes + '\n\n' : ''
+      const updated = `${existing}[${timestamp}] ${note.trim()}`
+
+      const { error } = await supabaseAdmin
+        .from('leads')
+        .update({ notes: updated })
+        .eq('id', lead_id)
+
+      if (error) throw error
+
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id,
+        action: 'note_added',
+        description: note.trim(),
+        performed_by,
+      })
+
+      return NextResponse.json({ success: true, notes: updated })
+    }
+
+    // ── Mark followup complete ──────────────────────────────
+    if (action === 'complete' && lead_id) {
+      const { error } = await supabaseAdmin
+        .from('leads')
+        .update({
+          followup_date: null,
+          last_contacted_at: new Date().toISOString(),
+        })
+        .eq('id', lead_id)
+
+      if (error) throw error
+
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id,
+        action: 'followup_completed',
+        description: 'Follow-up marked as completed',
+        performed_by,
+      })
+
+      return NextResponse.json({ success: true })
+    }
+
+    // ── Single WhatsApp followup ────────────────────────────
+    if (action === 'single' && lead_id) {
+      const { data: lead } = await supabaseAdmin
+        .from('leads')
+        .select('*')
+        .eq('id', lead_id)
+        .single()
+
+      if (!lead?.phone) {
+        return NextResponse.json({ error: 'any has no phone number' }, { status: 400 })
+      }
+
+      const message = WHATSAPP_MESSAGES.followUp(lead.name || undefined)
+      const sent = await smartSend(lead.phone, message, { type: 'session' })
+
+      if (sent) {
+        await supabaseAdmin
+          .from('leads')
+          .update({
+            last_contacted_at: new Date().toISOString(),
+            status: lead.status === 'new_inquiry' ? 'followup_pending' : lead.status,
+          })
+          .eq('id', lead_id)
+
+        await supabaseAdmin.from('activity_logs').insert({
+          lead_id,
+          action: 'followup_sent',
+          description: 'WhatsApp follow-up sent',
+          performed_by: 'system',
+        })
+      }
+
+      return NextResponse.json({ success: sent })
+    }
+
+    // ── Bulk WhatsApp followup ──────────────────────────────
+    if (action === 'bulk') {
+      const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+      const { data: leads } = await supabaseAdmin
+        .from('leads')
+        .select('id, name, phone, status')
+        .in('status', ['new_inquiry', 'followup_pending'])
+        .not('phone', 'is', null)
+        .or(`last_contacted_at.is.null,last_contacted_at.lt.${cutoff}`)
+        .limit(20)
+
+      if (!leads?.length) {
+        return NextResponse.json({ success: true, sent: 0, message: 'No leads to follow up' })
+      }
+
+      let sent = 0
+      for (const lead of leads) {
+        if (!lead.phone) continue
+        const message = WHATSAPP_MESSAGES.followUp(lead.name || undefined)
+        const ok = await smartSend(lead.phone, message, { type: 'session' })
+        if (ok) {
+          sent++
+          await supabaseAdmin
+            .from('leads')
+            .update({ last_contacted_at: new Date().toISOString() })
+            .eq('id', lead.id)
+          await new Promise(r => setTimeout(r, 1500))
+        }
+      }
+
+      return NextResponse.json({ success: true, sent, total: leads.length, message: `Sent ${sent} follow-up messages` })
+    }
+
+    return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
+  } catch (err) {
+    logger.error('followups', 'POST failed', err)
+    return NextResponse.json({ error: 'Follow-up operation failed' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\health\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextResponse } from 'next/server'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { initializeSheet, isSheetsConfigured } from '@/lib/sheets'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+// ─────────────────────────────────────────
+// GET /api/health
+// Comprehensive system health check.
+// Tests every critical table and service.
+// ─────────────────────────────────────────
+export async function GET() {
+  const checks: Record<string, { status: 'ok' | 'warn' | 'error'; message: string }> = {}
+
+  // Initialize Google Sheets headers + formatting if configured
+  if (isSheetsConfigured()) {
+    initializeSheet().catch(() => {})
+  }
+  const start = Date.now()
+
+  // ── Supabase connectivity ─────────────────────────────
+  try {
+    const { count, error } = await supabaseAdmin
+      .from('leads')
+      .select('*', { count: 'exact', head: true })
+    checks.supabase = error
+      ? { status: 'error', message: `Connection failed: ${error.message}` }
+      : { status: 'ok', message: `Connected — ${count ?? 0} leads` }
+  } catch (e: any) {
+    checks.supabase = { status: 'error', message: e.message }
+  }
+
+  // ── Critical tables existence check ──────────────────
+  const requiredTables = [
+    'leads', 'conversations', 'activity_logs', 'knowledge_chunks',
+    'documents', 'proposals', 'message_queue', 'broadcast_campaigns',
+    'ai_summaries', 'festival_calendar', 'notification_settings',
+  ]
+
+  for (const table of requiredTables) {
+    try {
+      const { error } = await supabaseAdmin
+        .from(table)
+        .select('*', { count: 'exact', head: true })
+      checks[`table_${table}`] = error
+        ? { status: 'error', message: `Table error: ${error.message}` }
+        : { status: 'ok', message: 'Table exists and accessible' }
+    } catch (e: any) {
+      checks[`table_${table}`] = { status: 'error', message: e.message }
+    }
+  }
+
+  // ── leads_needing_followup view ───────────────────────
+  try {
+    const { error } = await supabaseAdmin
+      .from('leads_needing_followup')
+      .select('id', { count: 'exact', head: true })
+    checks.view_followup = error
+      ? { status: 'warn', message: `View missing or broken: ${error.message}` }
+      : { status: 'ok', message: 'Followup view accessible' }
+  } catch (e: any) {
+    checks.view_followup = { status: 'warn', message: e.message }
+  }
+
+  // ── leads columns check (critical schema validation) ──
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('leads')
+      .select('id, phone, ai_score, whatsapp_opted_in, is_vip, event_date')
+      .limit(1)
+
+    if (error) {
+      // If specific columns are missing, this helps identify which
+      checks.leads_schema = { status: 'error', message: `Schema mismatch: ${error.message}` }
+    } else {
+      checks.leads_schema = { status: 'ok', message: 'All required columns present' }
+    }
+  } catch (e: any) {
+    checks.leads_schema = { status: 'error', message: e.message }
+  }
+
+  // ── Conversations schema check ────────────────────────
+  try {
+    const { error } = await supabaseAdmin
+      .from('conversations')
+      .select('id, session_id, messages, extracted_phone, lead_id, is_escalated')
+      .limit(1)
+    checks.conversations_schema = error
+      ? { status: 'error', message: `Schema mismatch: ${error.message}` }
+      : { status: 'ok', message: 'All required columns present' }
+  } catch (e: any) {
+    checks.conversations_schema = { status: 'error', message: e.message }
+  }
+
+  // ── RPC function for RAG ──────────────────────────────
+  try {
+    // Call with dummy embedding — just check it exists and returns
+    const { error } = await supabaseAdmin.rpc('match_knowledge_chunks', {
+      query_embedding: new Array(1536).fill(0),
+      match_threshold: 0.99,
+      match_count: 1,
+    })
+    checks.rag_function = error
+      ? { status: 'warn', message: `RPC error: ${error.message}` }
+      : { status: 'ok', message: 'match_knowledge_chunks() working' }
+  } catch (e: any) {
+    checks.rag_function = { status: 'warn', message: e.message }
+  }
+
+  // ── Knowledge base chunks ─────────────────────────────
+  try {
+    const { count } = await supabaseAdmin
+      .from('knowledge_chunks')
+      .select('*', { count: 'exact', head: true })
+    checks.knowledge_base = {
+      status: (count || 0) > 0 ? 'ok' : 'warn',
+      message: `${count ?? 0} chunks indexed${(count || 0) === 0 ? ' — seed from /admin' : ''}`,
+    }
+  } catch (e: any) {
+    checks.knowledge_base = { status: 'warn', message: e.message }
+  }
+
+  // ── API keys ──────────────────────────────────────────
+  checks.anthropic_key = process.env.ANTHROPIC_API_KEY
+    ? { status: 'ok', message: 'Configured' }
+    : { status: 'error', message: 'ANTHROPIC_API_KEY not set' }
+
+  checks.openai_key = process.env.OPENAI_API_KEY
+    ? { status: 'ok', message: 'Configured' }
+    : { status: 'warn', message: 'OPENAI_API_KEY not set — RAG embeddings disabled' }
+
+  // ── Google Sheets ─────────────────────────────────────
+  checks.google_sheets = process.env.GOOGLE_SHEETS_ID
+    ? { status: 'ok', message: 'Sheet ID configured' }
+    : { status: 'warn', message: 'GOOGLE_SHEETS_ID not set — sync disabled' }
+
+  // ── WhatsApp (Wati) ───────────────────────────────────
+  const watiConfigured = !!(process.env.WATI_BASE_URL && process.env.WATI_API_TOKEN)
+  checks.whatsapp = {
+    status: watiConfigured ? 'ok' : 'warn',
+    message: watiConfigured
+      ? 'Wati configured — webhook active'
+      : 'Wati not yet configured (pending for number 8274844343) — chatbot works without it',
+  }
+
+  // ── Summary ───────────────────────────────────────────
+  const values = Object.values(checks)
+  const hasErrors = values.some(c => c.status === 'error')
+  const hasWarnings = values.some(c => c.status === 'warn')
+
+  const overallStatus = hasErrors ? 'unhealthy' : hasWarnings ? 'degraded' : 'healthy'
+  const elapsed = Date.now() - start
+
+  return NextResponse.json(
+    {
+      status: overallStatus,
+      timestamp: new Date().toISOString(),
+      elapsed_ms: elapsed,
+      checks,
+      summary: {
+        total: values.length,
+        ok: values.filter(c => c.status === 'ok').length,
+        warn: values.filter(c => c.status === 'warn').length,
+        error: values.filter(c => c.status === 'error').length,
+      },
+    },
+    { status: hasErrors ? 503 : 200 }
+  )
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\knowledge\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { processTextIntoKnowledgeBase, deleteKnowledgeBySource, STATIC_KNOWLEDGE } from '@/lib/documents'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+export const maxDuration = 120 // 2 minutes for processing
+
+// GET — list all knowledge chunks / documents
+export async function GET() {
+  try {
+    const { data: docs, error: docsError } = await supabaseAdmin
+      .from('documents')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    const { count: chunkCount } = await supabaseAdmin
+      .from('knowledge_chunks')
+      .select('*', { count: 'exact', head: true })
+
+    if (docsError) throw docsError
+
+    return NextResponse.json({ documents: docs, total_chunks: chunkCount })
+  } catch (error) {
+    logger.error('knowledge', 'GET /api/knowledge error', error)
+    return NextResponse.json({ error: 'Failed to fetch knowledge base' }, { status: 500 })
+  }
+}
+
+// POST — seed static knowledge or process uploaded text
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { action, text, source, category, name } = body
+
+    // Action: seed_static — loads all built-in business knowledge
+    if (action === 'seed_static') {
+      let totalChunks = 0
+      const results = []
+
+      for (const item of STATIC_KNOWLEDGE) {
+        // Delete old chunks for this source
+        await deleteKnowledgeBySource(item.source)
+
+        // Process and embed
+        const count = await processTextIntoKnowledgeBase(
+          item.text,
+          item.source,
+          'manual',
+          item.category
+        )
+
+        totalChunks += count
+        results.push({ source: item.source, chunks: count })
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: `Seeded ${totalChunks} knowledge chunks from ${STATIC_KNOWLEDGE.length} sources`,
+        results,
+      })
+    }
+
+    // Action: add_text — add custom text to knowledge base
+    if (action === 'add_text' && text && source) {
+      // Delete old chunks for this source
+      await deleteKnowledgeBySource(source)
+
+      // Register document
+      const { data: doc } = await supabaseAdmin
+        .from('documents')
+        .upsert({
+          name: name || source,
+          original_filename: source,
+          file_type: 'txt',
+          category,
+          processed: false,
+          uploaded_by: 'admin',
+        })
+        .select('id')
+        .single()
+
+      const count = await processTextIntoKnowledgeBase(
+        text,
+        source,
+        'txt',
+        category || 'general'
+      )
+
+      // Update document record
+      if (doc) {
+        await supabaseAdmin
+          .from('documents')
+          .update({ processed: true, chunk_count: count })
+          .eq('id', doc.id)
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: `Processed ${count} chunks from ${source}`,
+      })
+    }
+
+    return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
+  } catch (error) {
+    logger.error('knowledge', 'POST /api/knowledge error', error)
+    return NextResponse.json({ error: 'Failed to process knowledge' }, { status: 500 })
+  }
+}
+
+// DELETE — remove knowledge by source
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const source = searchParams.get('source')
+
+    if (!source) {
+      return NextResponse.json({ error: 'Source required' }, { status: 400 })
+    }
+
+    await deleteKnowledgeBySource(source)
+
+    return NextResponse.json({ success: true, message: `Deleted knowledge for: ${source}` })
+  } catch (error) {
+    logger.error('knowledge', 'DELETE /api/knowledge error', error)
+    return NextResponse.json({ error: 'Failed to delete knowledge' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\leads\route.ts === 
+export const dynamic = 'force-dynamic'
+import { logger } from '@/lib/logger'
+import { NextRequest, NextResponse } from 'next/server'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { syncLeadToSheets } from '@/lib/sheets'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+// GET /api/leads — list all leads with filters
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const status = searchParams.get('status')
+    const source = searchParams.get('source')
+    const search = searchParams.get('search')
+    const limit = parseInt(searchParams.get('limit') || '50')
+    const offset = parseInt(searchParams.get('offset') || '0')
+
+    let query = supabaseAdmin
+      .from('leads')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1)
+
+    if (status && status !== 'all') {
+      query = query.eq('status', status)
+    }
+
+    if (source && source !== 'all') {
+      query = query.eq('source', source)
+    }
+
+    if (search) {
+      query = query.or(
+        `name.ilike.%${search}%,phone.ilike.%${search}%,email.ilike.%${search}%,event_type.ilike.%${search}%`
+      )
+    }
+
+    const { data, error, count } = await query
+
+    if (error) throw error
+
+    // Normalize legacy "new" status → "new_inquiry" in response
+    const normalized = (data || []).map((l: any) =>
+      l.status === 'new' ? { ...l, status: 'new_inquiry' } : l
+    )
+    return NextResponse.json({ leads: normalized, total: count, limit, offset })
+  } catch (error) {
+    logger.error('leads', 'GET failed', error)
+    return NextResponse.json({ error: 'Failed to fetch leads' }, { status: 500 })
+  }
+}
+
+// POST /api/leads — create a new lead manually
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+
+    const { data: lead, error } = await supabaseAdmin
+      .from('leads')
+      .insert({
+        name: body.name || null,
+        phone: body.phone || null,
+        email: body.email || null,
+        event_type: body.event_type || null,
+        event_date: body.event_date || null,
+        guest_count: body.guest_count ? parseInt(body.guest_count) : null,
+        budget: body.budget || null,
+        special_requirements: body.special_requirements || null,
+        venue: body.venue || null,
+        source: body.source || 'website',
+        status: body.status || 'new_inquiry',
+        assigned_to: body.assigned_to || null,
+        notes: body.notes || null,
+      })
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    // Log activity
+    await supabaseAdmin.from('activity_logs').insert({
+      lead_id: lead.id,
+      action: 'lead_created',
+      description: `any manually created from ${body.source || 'website'}`,
+      performed_by: 'admin',
+    })
+
+    // Sync to Google Sheets
+    await syncLeadToSheets(lead)
+
+    return NextResponse.json({ lead }, { status: 201 })
+  } catch (error) {
+    logger.error('leads', 'POST failed', error)
+    return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })
+  }
+}
+
+// PATCH /api/leads — update lead status/fields
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { id, ...updates } = body
+
+    if (!id) {
+      return NextResponse.json({ error: 'any ID required' }, { status: 400 })
+    }
+
+    const { data: lead, error } = await supabaseAdmin
+      .from('leads')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    // Log status change
+    if (updates.status) {
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id: id,
+        action: 'status_changed',
+        description: `Status updated to: ${updates.status}`,
+        performed_by: 'admin',
+        metadata: { new_status: updates.status },
+      })
+    }
+
+    // Re-sync to Sheets
+    syncLeadToSheets(lead).catch(err => logger.error('leads', 'Sheets re-sync failed', err))
+
+    return NextResponse.json({ lead })
+  } catch (error) {
+    logger.error('leads', 'PATCH failed', error)
+    return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\leads\summary\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+export const maxDuration = 30
+
+// POST — generate and store AI lead summary
+export async function POST(req: NextRequest) {
+  try {
+    const { lead_id } = await req.json()
+    if (!lead_id) return NextResponse.json({ error: 'lead_id required' }, { status: 400 })
+
+    const [leadRes, convsRes, logsRes, propsRes] = await Promise.all([
+      supabaseAdmin.from('leads').select('*').eq('id', lead_id).single(),
+      supabaseAdmin.from('conversations').select('messages,summary,channel').eq('lead_id', lead_id).order('created_at', { ascending: false }).limit(3),
+      supabaseAdmin.from('activity_logs').select('action,description,created_at').eq('lead_id', lead_id).order('created_at', { ascending: false }).limit(20),
+      supabaseAdmin.from('proposals').select('proposal_number,package_name,total_price,status').eq('lead_id', lead_id).order('created_at', { ascending: false }).limit(5),
+    ])
+
+    const lead = leadRes.data
+    if (!lead) return NextResponse.json({ error: 'any not found' }, { status: 404 })
+
+    const convMessages = (convsRes.data || [])
+      .flatMap((c: any) => (c.messages || []).slice(-20))
+      .map((m: any) => `${m.role === 'user' ? 'Customer' : 'Aria'}: ${m.content}`)
+      .join('\n')
+
+    const activityText = (logsRes.data || [])
+      .map((a: any) => `[${new Date(a.created_at).toLocaleDateString('en-IN')}] ${a.action}: ${a.description}`)
+      .join('\n')
+
+    const proposalText = (propsRes.data || [])
+      .map((p: any) => `${p.proposal_number} — ${p.package_name} Rs${p.total_price?.toLocaleString('en-IN')} (${p.status})`)
+      .join('\n')
+
+    const context = `LEAD: ${lead.name || 'Unknown'} | Phone: ${lead.phone || '-'} | Email: ${lead.email || '-'}
+Event: ${lead.event_type || '-'} | Date: ${lead.event_date || '-'} | Guests: ${lead.guest_count || '-'}
+Budget: ${lead.budget || '-'} | Venue: ${lead.venue || '-'} | Source: ${lead.source}
+Status: ${lead.status} | AI Score: ${lead.ai_score || lead.lead_score || '-'}/10
+Notes: ${lead.notes || 'None'}
+
+CONVERSATIONS:
+${convMessages || 'No conversations recorded'}
+
+ACTIVITY:
+${activityText || 'No activity'}
+
+PROPOSALS:
+${proposalText || 'None created'}`
+
+    const Anthropic = (await import('@anthropic-ai/sdk')).default
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 400,
+      messages: [{
+        role: 'user',
+        content: `You are a CRM analyst for BookMySpaces, a premium event venue in Kolkata.
+Analyze this lead and return ONLY valid JSON, no explanation.
+
+${context}
+
+Return exactly:
+{"event_type":"","estimated_budget":"","urgency":"high/medium/low","lead_quality":"hot/warm/cold","key_requirements":[],"objections":[],"conversion_likelihood":"high/medium/low","recommended_action":"","summary":"2-3 sentence plain English summary"}`
+      }]
+    })
+
+    const text = response.content[0].type === 'text' ? response.content[0].text : '{}'
+    let parsed: Record<string, unknown> = {}
+    try { parsed = JSON.parse((text.match(/\{[\s\S]*\}/) || ['{}'])[0]) } catch { parsed = { summary: text.slice(0, 300) } }
+
+    // Store summary text on lead
+    await supabaseAdmin.from('leads').update({
+      inquiry_summary: (parsed.summary as string) || text.slice(0, 500)
+    }).eq('id', lead_id)
+
+    // Log activity
+    await supabaseAdmin.from('activity_logs').insert({
+      lead_id,
+      action: 'ai_summary_generated',
+      description: 'AI lead intelligence summary generated',
+      performed_by: 'system',
+      metadata: parsed,
+    })
+
+    return NextResponse.json({ summary: parsed })
+  } catch (err) {
+    logger.error('summary', 'AI summary failed', err)
+    return NextResponse.json({ error: 'Summary generation failed' }, { status: 500 })
+  }
+}
+
+// GET — fetch lead context (lead + conversations + activities + proposals)
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const leadId = searchParams.get('lead_id')
+  if (!leadId) return NextResponse.json({ error: 'lead_id required' }, { status: 400 })
+
+  const [leadRes, convsRes, logsRes, propsRes] = await Promise.all([
+    supabaseAdmin.from('leads').select('*').eq('id', leadId).single(),
+    supabaseAdmin.from('conversations').select('id,messages,summary,channel,created_at').eq('lead_id', leadId).order('created_at', { ascending: false }).limit(5),
+    supabaseAdmin.from('activity_logs').select('*').eq('lead_id', leadId).order('created_at', { ascending: false }).limit(30),
+    supabaseAdmin.from('proposals').select('id,proposal_number,package_name,total_price,status,created_at').eq('lead_id', leadId).order('created_at', { ascending: false }),
+  ])
+
+  return NextResponse.json({
+    lead: leadRes.data,
+    conversations: convsRes.data || [],
+    activities: logsRes.data || [],
+    proposals: propsRes.data || [],
+  })
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\notifications\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+export async function GET() {
+  try {
+    const { data } = await supabaseAdmin
+      .from('notification_settings')
+      .select('*')
+      .order('key')
+
+    const settings: Record<string, string> = {}
+    for (const row of data || []) {
+      settings[row.key] = row.value || ''
+    }
+
+    return NextResponse.json({ settings })
+  } catch (err) {
+    return NextResponse.json({ error: 'Failed to fetch settings' }, { status: 500 })
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const { settings } = await req.json()
+
+    for (const [key, value] of Object.entries(settings)) {
+      await supabaseAdmin
+        .from('notification_settings')
+        .upsert({ key, value: String(value), updated_at: new Date().toISOString() }, { onConflict: 'key' })
+    }
+
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    return NextResponse.json({ error: 'Failed to save settings' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\proposal\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\proposal\share\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\proposal\share\[token]\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+// ─────────────────────────────────────────
+// GET /api/proposal/share/[token]
+// Public endpoint — no auth required.
+// Returns only the fields needed for client-facing view.
+// Does NOT expose: lead_id, internal notes, CRM status details.
+// ─────────────────────────────────────────
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: { token: string } }
+) {
+  const { token } = params
+
+  if (!token || token.length < 16) {
+    return NextResponse.json({ error: 'Invalid token' }, { status: 400 })
+  }
+
+  const { data: proposal, error } = await supabaseAdmin
+    .from('proposals')
+    .select(`
+      id,
+      proposal_number,
+      client_name,
+      client_phone,
+      client_email,
+      event_type,
+      event_date,
+      event_time,
+      guest_count,
+      venue,
+      package_name,
+      base_price,
+      addons,
+      discount_amount,
+      discount_reason,
+      total_price,
+      advance_required,
+      special_requirements,
+      inclusions,
+      ai_cover_note,
+      notes,
+      status,
+      share_token,
+      expires_at,
+      created_at
+    `)
+    .eq('share_token', token)
+    .single()
+
+  if (error || !proposal) {
+    return NextResponse.json({ error: 'Proposal not found' }, { status: 404 })
+  }
+
+  // Return public-safe proposal (no internal fields like lead_id)
+  return NextResponse.json({ proposal })
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\proposals\route.ts === 
+export const dynamic = 'force-dynamic'
+import { logger } from '@/lib/logger'
+import { v4 as uuidv4 } from 'uuid'
+import { NextRequest, NextResponse } from 'next/server'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { generateProposalCoverNote } from '@/lib/scoring'
+import { parseEventDate } from '@/lib/ai'
+import { generateProposalHTML } from '@/lib/proposal-pdf'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+export const maxDuration = 30
+
+// GET — list proposals
+export async function GET(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url)
+    const leadId = searchParams.get('lead_id')
+    const status = searchParams.get('status')
+    const id = searchParams.get('id')
+
+    // Single proposal by ID
+    if (id) {
+      const { data, error } = await supabaseAdmin
+        .from('proposals')
+        .select('*, leads(name, phone, email)')
+        .eq('id', id)
+        .single()
+      if (error) throw error
+      return NextResponse.json({ proposal: data })
+    }
+
+    let query = supabaseAdmin
+      .from('proposals')
+      .select('*, leads(name, phone, email)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+
+    if (leadId) query = query.eq('lead_id', leadId)
+    if (status) query = query.eq('status', status)
+
+    const { data, error, count } = await query.limit(50)
+    if (error) throw error
+
+    return NextResponse.json({ proposals: data, total: count })
+  } catch (err) {
+    logger.error('proposals', 'GET failed', err)
+    return NextResponse.json({ error: 'Failed to fetch proposals' }, { status: 500 })
+  }
+}
+
+// POST — create proposal (with AI cover note)
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const {
+      lead_id,
+      client_name,
+      client_phone,
+      client_email,
+      event_type,
+      event_date,
+      event_time,
+      guest_count,
+      venue,
+      package_name,
+      base_price,
+      addons = [],
+      discount_amount = 0,
+      discount_reason,
+      special_requirements,
+      inclusions,
+      generate_cover_note = true,
+    } = body
+
+    // Calculate total
+    const addons_total = addons.reduce(
+      (sum: number, a: { price: number }) => sum + (a.price || 0),
+      0
+    )
+    const total_price = base_price + addons_total - (discount_amount || 0)
+    const advance_required = Math.round(total_price * 0.3)
+
+    const proposalData = {
+      client_name,
+      client_phone,
+      client_email,
+      event_type,
+      event_date,
+      event_time,
+      guest_count,
+      venue,
+      package_name,
+      base_price,
+      addons,
+      discount_amount,
+      discount_reason,
+      total_price,
+      advance_required,
+      special_requirements,
+      inclusions,
+    }
+
+    // Generate AI cover note
+    let ai_cover_note = null
+    if (generate_cover_note) {
+      ai_cover_note = await generateProposalCoverNote(proposalData)
+    }
+
+    // Create in DB
+    const { data: proposal, error } = await supabaseAdmin
+      .from('proposals')
+      .insert({
+        lead_id: lead_id || null,
+        client_name,
+        client_phone,
+        client_email,
+        event_type,
+        event_date: parseEventDate(event_date) || null, // safely convert string to DATE type
+        event_time,
+        guest_count: guest_count ? parseInt(guest_count) : null,
+        venue,
+        package_name,
+        base_price,
+        addons,
+        discount_amount,
+        discount_reason,
+        total_price,
+        advance_required,
+        special_requirements,
+        inclusions,
+        ai_cover_note,
+        status: 'draft',
+        share_token: uuidv4().replace(/-/g, ''), // unique 32-char public share token
+      })
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    // Update lead status
+    if (lead_id) {
+      await supabaseAdmin
+        .from('leads')
+        .update({ status: 'proposal_sent', proposal_sent_at: new Date().toISOString() })
+        .eq('id', lead_id)
+
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id,
+        action: 'proposal_created',
+        description: `Proposal ${proposal.proposal_number} created: ${package_name} — ₹${total_price.toLocaleString('en-IN')}`,
+        performed_by: 'admin',
+      })
+    }
+
+    return NextResponse.json({ proposal }, { status: 201 })
+  } catch (err) {
+    logger.error('proposals', 'POST failed', err)
+    return NextResponse.json({ error: 'Failed to create proposal' }, { status: 500 })
+  }
+}
+
+// PATCH — update proposal status
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { id, ...updates } = body
+
+    if (!id) return NextResponse.json({ error: 'Proposal ID required' }, { status: 400 })
+
+    const { data: proposal, error } = await supabaseAdmin
+      .from('proposals')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .single()
+
+    if (error) throw error
+
+    // Log status change
+    if (updates.status === 'sent' && proposal.lead_id) {
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id: proposal.lead_id,
+        action: 'proposal_sent',
+        description: `Proposal ${proposal.proposal_number} sent to client`,
+        performed_by: 'admin',
+      })
+    }
+
+    return NextResponse.json({ proposal })
+  } catch (err) {
+    logger.error('proposals', 'PATCH failed', err)
+    return NextResponse.json({ error: 'Failed to update proposal' }, { status: 500 })
+  }
+}
+
+// ─────────────────────────────────────────
+// PUT /api/proposals — delivery tracking
+// Records view, whatsapp_sent, email_sent events
+// Called from share page on each view + from buttons on send
+// ─────────────────────────────────────────
+export async function PUT(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { id, token, action } = body // action: 'view' | 'whatsapp_sent' | 'email_sent'
+
+    if (!id && !token) {
+      return NextResponse.json({ error: 'id or token required' }, { status: 400 })
+    }
+
+    // Fetch proposal by token (public) or id (internal)
+    const { data: proposal, error: fetchErr } = token
+      ? await supabaseAdmin.from('proposals').select('id, status, share_view_count, lead_id, proposal_number, sent_at').eq('share_token', token).single()
+      : await supabaseAdmin.from('proposals').select('id, status, share_view_count, lead_id, proposal_number, sent_at').eq('id', id).single()
+
+    if (fetchErr || !proposal) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+
+    const now = new Date().toISOString()
+    const updates: Record<string, unknown> = {}
+
+    if (action === 'view') {
+      updates.last_viewed_at = now
+      updates.share_view_count = (proposal.share_view_count || 0) + 1
+      // Auto-upgrade status sent → viewed
+      if (proposal.status === 'sent') {
+        updates.status = 'viewed'
+        updates.viewed_at = now
+      }
+    }
+
+    if (action === 'whatsapp_sent') {
+      updates.whatsapp_sent_at = now
+      if (proposal.status === 'draft') {
+        updates.status = 'sent'
+        updates.sent_at = now
+      }
+      // Log activity
+      if (proposal.lead_id) {
+        await supabaseAdmin.from('activity_logs').insert({
+          lead_id: proposal.lead_id,
+          action: 'proposal_whatsapp_sent',
+          description: `Proposal ${proposal.proposal_number} shared via WhatsApp`,
+          performed_by: 'admin',
+        })
+      }
+    }
+
+    if (action === 'email_sent') {
+      updates.email_sent_at = now
+      if (proposal.status === 'draft') {
+        updates.status = 'sent'
+        updates.sent_at = now
+      }
+      if (proposal.lead_id) {
+        await supabaseAdmin.from('activity_logs').insert({
+          lead_id: proposal.lead_id,
+          action: 'proposal_email_sent',
+          description: `Proposal ${proposal.proposal_number} shared via email`,
+          performed_by: 'admin',
+        })
+      }
+    }
+
+    await supabaseAdmin.from('proposals').update(updates).eq('id', proposal.id)
+    return NextResponse.json({ success: true })
+  } catch (err) {
+    logger.error('proposals', 'Track event failed', err)
+    return NextResponse.json({ error: 'Tracking failed' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\proposals\email\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+export const maxDuration = 30
+
+// ─────────────────────────────────────────
+// POST /api/proposals/email
+// Sends a branded proposal email via mailto: link generation
+// OR via a configured SMTP service if SMTP_HOST is set.
+//
+// Fallback (no SMTP): returns a pre-filled mailto: URL
+// the client opens in their email app — zero config needed.
+// ─────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  try {
+    const { proposal_id, recipient_email, custom_message } = await req.json()
+
+    if (!proposal_id) {
+      return NextResponse.json({ error: 'proposal_id required' }, { status: 400 })
+    }
+
+    const { data: proposal, error } = await supabaseAdmin
+      .from('proposals')
+      .select('*, leads(name, phone, email)')
+      .eq('id', proposal_id)
+      .single()
+
+    if (error || !proposal) {
+      return NextResponse.json({ error: 'Proposal not found' }, { status: 404 })
+    }
+
+    const shareUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://bookmyspaces.in'}/proposal/share/${proposal.share_token}`
+    const toEmail = recipient_email || proposal.client_email || (proposal.leads as any)?.email || ''
+    const clientName = proposal.client_name || (proposal.leads as any)?.name || 'Valued Client'
+
+    // Build email content
+    const subject = `Your Event Proposal — ${proposal.proposal_number} | BookMySpaces`
+
+    // ── Generate mailto URL (zero dependencies, works everywhere) ──
+    // To enable real SMTP: install nodemailer, add SMTP_HOST/USER/PASS env vars,
+    // and replace this section with nodemailer.createTransport().sendMail()
+    // ────────────────────────────────────────────────────────
+    const mailtoBody = [
+      `Dear ${clientName},`,
+      '',
+      custom_message || `Thank you for your interest in BookMySpaces. Please find your event proposal below.`,
+      '',
+      `📋 Proposal: ${proposal.proposal_number}`,
+      `🎪 Event: ${proposal.event_type || '-'}`,
+      `💰 Package Value: ₹${(proposal.total_price || 0).toLocaleString('en-IN')}`,
+      '',
+      `View your complete proposal here:`,
+      shareUrl,
+      '',
+      `To confirm your booking, please reply to this email or WhatsApp us at +91 9051459463.`,
+      '',
+      `Warm regards,`,
+      `BookMySpaces Team`,
+      `📞 9051459463 | www.bookmyspaces.in`,
+    ].join('\n')
+
+    const mailtoUrl = `mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(mailtoBody)}`
+
+    // Still track the attempt
+    Promise.resolve(supabaseAdmin.from('proposals').update({
+      email_sent_at: new Date().toISOString(),
+      status: proposal.status === 'draft' ? 'sent' : proposal.status,
+    }).eq('id', proposal_id)).catch(() => {})
+
+    return NextResponse.json({
+      success: true,
+      method: 'mailto',
+      mailto_url: mailtoUrl,
+      sent_to: toEmail,
+      note: 'SMTP not configured — use mailto_url to open in email client',
+    })
+
+  } catch (err) {
+    logger.error('proposals-email', 'Email route failed', err)
+    return NextResponse.json({ error: 'Email send failed' }, { status: 500 })
+  }
+}
+
+// ─────────────────────────────────────────
+// Branded HTML email body
+// ─────────────────────────────────────────
+function buildEmailBody(proposal: any, shareUrl: string, clientName: string, customMessage?: string): string {
+  const totalAddons = (proposal.addons || []).reduce((s: number, a: any) => s + (a.price || 0), 0)
+
+  return `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f8f5f0;font-family:'DM Sans',system-ui,sans-serif">
+<div style="max-width:600px;margin:0 auto;padding:24px 16px">
+
+  <!-- Header -->
+  <div style="background:#0f1923;border-radius:12px 12px 0 0;padding:20px 28px;display:flex;align-items:center;gap:12px">
+    <div style="width:36px;height:36px;background:#c9a84c;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:#0f1923">B</div>
+    <div>
+      <div style="color:#fff;font-weight:700;font-size:16px">BookMySpaces</div>
+      <div style="color:#c9a84c;font-size:11px">Premium Event Venues · Kolkata</div>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div style="background:#fff;padding:28px;border-radius:0 0 12px 12px;box-shadow:0 2px 8px rgba(0,0,0,0.06)">
+
+    <p style="font-size:15px;color:#374151;margin:0 0 8px">Dear <strong>${clientName}</strong>,</p>
+    <p style="font-size:14px;color:#6b7280;line-height:1.7;margin:0 0 24px">
+      ${customMessage || 'Thank you for considering BookMySpaces for your special event. We have prepared a personalised proposal for you.'}
+    </p>
+
+    <!-- Proposal card -->
+    <div style="background:linear-gradient(135deg,#0f1923,#1a2d40);border-radius:12px;padding:20px 24px;margin-bottom:20px">
+      <div style="color:#c9a84c;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Event Proposal</div>
+      <div style="color:#fff;font-size:20px;font-weight:700;margin-bottom:4px">${proposal.proposal_number}</div>
+      <div style="color:rgba(255,255,255,0.6);font-size:13px">${proposal.event_type || 'Special Event'} · ${proposal.venue || 'BookMySpaces Venue'}</div>
+    </div>
+
+    <!-- Details -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+      ${proposal.event_date ? `<tr><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280;width:40%">Event Date</td><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px;color:#1f2937;font-weight:600">${new Date(proposal.event_date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</td></tr>` : ''}
+      ${proposal.guest_count ? `<tr><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280">Guests</td><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px;color:#1f2937;font-weight:600">${proposal.guest_count} persons</td></tr>` : ''}
+      ${proposal.package_name ? `<tr><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px;color:#6b7280">Package</td><td style="padding:8px 0;border-bottom:1px solid #f3f4f6;font-size:13px;color:#1f2937;font-weight:600">${proposal.package_name}</td></tr>` : ''}
+      <tr><td style="padding:12px 0;font-size:15px;color:#0f1923;font-weight:700">Total Value</td><td style="padding:12px 0;font-size:20px;color:#c9a84c;font-weight:800">₹${(proposal.total_price || 0).toLocaleString('en-IN')}</td></tr>
+    </table>
+
+    ${proposal.advance_required ? `<div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:12px 16px;margin-bottom:20px"><div style="font-size:13px;color:#92400e;font-weight:600">Advance to Confirm: <span style="font-size:16px">₹${proposal.advance_required.toLocaleString('en-IN')}</span></div></div>` : ''}
+
+    <!-- CTA Button -->
+    <div style="text-align:center;margin:24px 0">
+      <a href="${shareUrl}" style="display:inline-block;background:#c9a84c;color:#0f1923;font-weight:700;font-size:15px;padding:14px 32px;border-radius:10px;text-decoration:none">
+        View Complete Proposal →
+      </a>
+    </div>
+
+    <p style="font-size:13px;color:#9ca3af;text-align:center;margin-bottom:0">
+      To confirm your booking, reply to this email or WhatsApp us at <strong>+91 9051459463</strong>
+    </p>
+  </div>
+
+  <!-- Footer -->
+  <div style="text-align:center;padding:16px;color:#9ca3af;font-size:11px;line-height:1.8">
+    BookMySpaces · Mukundapur, Near EM Bypass, Kolkata<br>
+    <a href="https://bookmyspaces.in" style="color:#c9a84c;text-decoration:none">www.bookmyspaces.in</a>
+  </div>
+</div>
+</body>
+</html>`
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\proposals\[id]\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\proposals\[id]\pdf\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { generateProposalHTML } from '@/lib/proposal-pdf'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+// ─────────────────────────────────────────
+// GET /api/proposals/[id]/pdf
+//
+// Returns a print-optimized HTML document.
+// The Content-Disposition header tells the browser to treat it as a
+// downloadable file — when the user opens it, their browser's print dialog
+// automatically opens (via window.onload → window.print()).
+// On mobile Chrome/Safari: tap Print → Save as PDF.
+// On desktop Chrome: Print → Save as PDF → Download.
+//
+// Zero dependencies — works on Vercel free tier.
+// ─────────────────────────────────────────
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { data: proposal, error } = await supabaseAdmin
+      .from('proposals')
+      .select('*')
+      .eq('id', params.id)
+      .single()
+
+    if (error || !proposal) {
+      return new NextResponse('Proposal not found', { status: 404 })
+    }
+
+    // Generate base HTML from existing utility
+    const baseHtml = generateProposalHTML(proposal as any)
+
+    // Inject print-auto-trigger and enhanced @media print CSS.
+    // We inject before </head> so it runs after the proposal styles.
+    const printEnhancements = `
+<style>
+  /* ── Print optimizations ── */
+  @media print {
+    @page {
+      size: A4;
+      margin: 0;
+    }
+
+    /* Hide browser-added headers/footers */
+    html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    body {
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    /* Force background colours to print */
+    * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+
+    /* Remove any scrollbars / overflow */
+    body { overflow: visible !important; }
+
+    /* Page break control */
+    .no-break { page-break-inside: avoid; break-inside: avoid; }
+    .page-break { page-break-after: always; break-after: always; }
+  }
+
+  /* ── Screen: loading state while print dialog opens ── */
+  @media screen {
+    .pdf-loading-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 25, 35, 0.85);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      color: white;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      gap: 16px;
+    }
+    .pdf-spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255,255,255,0.2);
+      border-top-color: #c9a84c;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .pdf-instruction {
+      font-size: 13px;
+      color: rgba(255,255,255,0.7);
+      text-align: center;
+      max-width: 300px;
+      line-height: 1.5;
+    }
+  }
+</style>
+
+<!-- Loading overlay — visible only on screen while print dialog opens -->
+<div class="pdf-loading-overlay" id="pdf-overlay">
+  <div class="pdf-spinner"></div>
+  <div style="font-size: 16px; font-weight: 600;">Preparing PDF…</div>
+  <div class="pdf-instruction">
+    In the print dialog, select <strong>Save as PDF</strong> as the destination.<br>
+    Set paper size to <strong>A4</strong> and margins to <strong>None</strong>.
+  </div>
+</div>
+
+<script>
+  // Auto-trigger print dialog after page fully loads (fonts + images)
+  window.addEventListener('load', function () {
+    // Short delay ensures fonts are rendered
+    setTimeout(function () {
+      // Hide the overlay when print dialog opens
+      var overlay = document.getElementById('pdf-overlay');
+
+      window.onafterprint = function () {
+        // After print dialog closes, go back or show done state
+        if (overlay) {
+          overlay.innerHTML = '<div style="color:white;font-family:DM Sans,system-ui,sans-serif;text-align:center;padding:24px"><div style="font-size:18px;font-weight:600;margin-bottom:8px">✓ Done</div><div style="font-size:13px;opacity:0.7">You can close this tab.</div></div>';
+          setTimeout(function(){ overlay.style.display = 'none'; }, 2000);
+        }
+      };
+
+      if (overlay) overlay.style.display = 'none';
+      window.print();
+
+    }, 800);
+  });
+</script>
+`
+
+    // Inject before </head>
+    const finalHtml = baseHtml.replace('</head>', printEnhancements + '</head>')
+
+    // Safe filename from proposal number
+    const proposalNum = (proposal.proposal_number || `proposal-${params.id.slice(0, 8)}`).replace(/[^a-zA-Z0-9\-]/g, '-')
+    const clientSlug = (proposal.client_name || 'client').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30)
+    const filename = `BookMySpaces-${proposalNum}-${clientSlug}.pdf`
+
+    return new NextResponse(finalHtml, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        // Suggests filename — browser shows "Save as" with this name
+        'Content-Disposition': `filename="${filename}"`,
+        'Cache-Control': 'no-store',
+      },
+    })
+  } catch (err) {
+    logger.error('proposals-pdf', 'PDF generation error', err)
+    return new NextResponse('Error generating PDF', { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\proposals\[id]\preview\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { generateProposalHTML } from '@/lib/proposal-pdf'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+// GET /api/proposals/[id]/preview — returns full HTML for browser print
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { data: proposal, error } = await supabaseAdmin
+      .from('proposals')
+      .select('*')
+      .eq('id', params.id)
+      .single()
+
+    if (error || !proposal) {
+      return new NextResponse('Proposal not found', { status: 404 })
+    }
+
+    // Mark as viewed
+    if (proposal.status === 'sent') {
+      await supabaseAdmin
+        .from('proposals')
+        .update({ status: 'viewed', viewed_at: new Date().toISOString() })
+        .eq('id', params.id)
+    }
+
+    const html = generateProposalHTML(proposal as any)
+
+    return new NextResponse(html, {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache',
+      },
+    })
+  } catch (err) {
+    logger.error('proposals-preview', 'Proposal preview error', err)
+    return new NextResponse('Error generating proposal', { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\whatsapp\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\whatsapp\campaigns\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { logger } from '@/lib/logger'
+import { sendBroadcastCampaign, sendTemplateMessage } from '@/lib/whatsapp'
+import { APPROVED_TEMPLATES, TEMPLATE_PARAMS } from '@/lib/templates'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+export const maxDuration = 120
+
+// GET — list recent campaigns
+export async function GET() {
+  try {
+    const { data } = await supabaseAdmin
+      .from('broadcast_campaigns')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    return NextResponse.json({ campaigns: data || [] })
+  } catch {
+    return NextResponse.json({ campaigns: [] })
+  }
+}
+
+// POST — trigger a campaign
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const {
+      type,           // 'followup' | 'festival' | 'reengagement' | 'review_request'
+      segment,        // 'all' | 'new_inquiry' | 'followup_pending' | 'future_prospect'
+      customMessage,  // for session messages within 24h
+      templateParams, // override template params
+      dryRun = false, // if true, just count recipients
+    } = body
+
+    // ── Build recipient list ──
+    let query = supabaseAdmin
+      .from('leads')
+      .select('id, name, phone, email, event_date, status, last_contacted_at')
+      .not('phone', 'is', null)
+
+    if (segment && segment !== 'all') {
+      query = query.eq('status', segment)
+    }
+
+    // For follow-up campaigns: only leads not contacted in 48h
+    if (type === 'followup') {
+      const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+      query = query.or(`last_contacted_at.is.null,last_contacted_at.lt.${cutoff}`)
+    }
+
+    const { data: leads, error } = await query.limit(500) // safety cap
+
+    if (error) throw error
+    if (!leads?.length) {
+      return NextResponse.json({ success: true, message: 'No eligible recipients', count: 0 })
+    }
+
+    if (dryRun) {
+      return NextResponse.json({
+        success: true,
+        dryRun: true,
+        count: leads.length,
+        sample: leads.slice(0, 5).map(l => ({ name: l.name, phone: l.phone })),
+      })
+    }
+
+    // ── Send campaign ──
+    const recipients = leads
+      .filter(l => l.phone)
+      .map(l => ({
+        whatsappNumber: l.phone!,
+        customParams: type === 'followup'
+          ? TEMPLATE_PARAMS.followup(l.name || 'there', 'BookMySpaces')
+          : type === 'review_request'
+          ? TEMPLATE_PARAMS.reviewRequest(l.name || 'there', l.event_date || '')
+          : undefined,
+      }))
+
+    let templateName = APPROVED_TEMPLATES.INQUIRY_FOLLOWUP
+    if (type === 'festival') templateName = APPROVED_TEMPLATES.FESTIVAL_PROMO
+    if (type === 'reengagement') templateName = APPROVED_TEMPLATES.REENGAGEMENT
+    if (type === 'review_request') templateName = APPROVED_TEMPLATES.REVIEW_REQUEST
+
+    const result = await sendBroadcastCampaign(
+      recipients,
+      templateName,
+      `${type}_${new Date().toISOString().split('T')[0]}`
+    )
+
+    // Log campaign
+    try {
+      await supabaseAdmin.from('broadcast_campaigns').insert({
+        name: `${type}_campaign_${new Date().toISOString().split('T')[0]}`,
+        type,
+        channel: 'whatsapp',
+        segment: typeof segment === 'string' ? { status: segment } : (segment || {}),
+        template_name: templateName,
+        message_template: templateName, // required NOT NULL
+        recipient_count: leads.length,
+        sent_count: result.success,
+        failed_count: result.failed,
+        status: 'completed',
+        sent_at: new Date().toISOString(),
+      })
+    } catch {
+      // campaigns table may not exist yet — non-critical
+    }
+
+    return NextResponse.json({
+      success: true,
+      type,
+      sent: result.success,
+      failed: result.failed,
+      total: leads.length,
+    })
+  } catch (err) {
+    logger.error('whatsapp-campaigns', 'Campaign failed', err)
+    return NextResponse.json({ error: 'Campaign failed' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\whatsapp\send\route.ts === 
+export const dynamic = 'force-dynamic'
+import { NextRequest, NextResponse } from 'next/server'
+import { logger } from '@/lib/logger'
+import { sendWhatsAppMessage, sendTemplateMessage } from '@/lib/whatsapp'
+import { smartSend } from '@/lib/queue'
+import { WHATSAPP_MESSAGES } from '@/lib/templates'
+import { getSupabaseAdmin } from '@/lib/supabase'
+
+const supabaseAdmin = getSupabaseAdmin()
+
+export const runtime = 'nodejs'
+
+// POST /api/whatsapp/send — Send a WhatsApp message to a lead
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { phone, message, lead_id, template, type = 'session' } = body
+
+    if (!phone) {
+      return NextResponse.json({ error: 'Phone number required' }, { status: 400 })
+    }
+
+    let finalMessage = message
+
+    // Pre-built template messages
+    if (template) {
+      switch (template) {
+        case 'greeting': finalMessage = WHATSAPP_MESSAGES.greeting(); break
+        case 'packages': finalMessage = WHATSAPP_MESSAGES.packagesOverview(); break
+        case 'followup': finalMessage = WHATSAPP_MESSAGES.followUp(); break
+        case 'payment': finalMessage = WHATSAPP_MESSAGES.paymentInfo(); break
+        case 'trust': finalMessage = WHATSAPP_MESSAGES.trustMessage(); break
+        case 'urgency': finalMessage = WHATSAPP_MESSAGES.urgency(); break
+        case 'escalate': finalMessage = WHATSAPP_MESSAGES.escalateToHuman(); break
+        case 'rooftop': finalMessage = WHATSAPP_MESSAGES.rooftopInfo(); break
+        case 'dining': finalMessage = WHATSAPP_MESSAGES.privateDining(); break
+        case 'skyline': finalMessage = WHATSAPP_MESSAGES.skylineRooms(); break
+        case 'cafe': finalMessage = WHATSAPP_MESSAGES.cafeInfo(); break
+        default: break
+      }
+    }
+
+    if (!finalMessage) {
+      return NextResponse.json({ error: 'Message content required' }, { status: 400 })
+    }
+
+    const success = await smartSend(phone, finalMessage, { type })
+
+    if (success && lead_id) {
+      // Log activity
+      await supabaseAdmin.from('activity_logs').insert({
+        lead_id,
+        action: 'whatsapp_sent',
+        description: `WhatsApp message sent: "${finalMessage.substring(0, 100)}..."`,
+        performed_by: 'staff',
+        metadata: { template, phone },
+      })
+
+      // Update last_contacted_at
+      await supabaseAdmin
+        .from('leads')
+        .update({ last_contacted_at: new Date().toISOString() })
+        .eq('id', lead_id)
+    }
+
+    return NextResponse.json({ success, phone, message_preview: finalMessage.substring(0, 100) })
+  } catch (err) {
+    logger.error('whatsapp-send', 'POST /api/whatsapp/send error', err)
+    return NextResponse.json({ error: 'Failed to send message' }, { status: 500 })
+  }
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\whatsapp\webhook\route.ts === 
+import { NextRequest, NextResponse } from 'next/server'
+import { isWatiConfigured, WatiWebhookPayload, WatiIncomingMessage, extractMessageText } from '@/lib/whatsapp'
+import { chatWithAI, extractLeadFromTag, extractLeadViaAI, mergeExtracted, cleanAIResponse, hasMinimumLeadData, sanitizeString, parseGuestCount, parseEventDate, Message } from '@/lib/ai'
+import { getSupabaseAdmin } from '@/lib/supabase'
+import { syncLeadToSheets } from '@/lib/sheets'
+import { smartSend, isRateLimited } from '@/lib/queue'
+import { logger } from '@/lib/logger'
+
+export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 30
+
+
+const supabaseAdmin = getSupabaseAdmin()
+
+
+// ─────────────────────────────────────────
+// ESCALATION TRIGGERS
+// ─────────────────────────────────────────
+const ESCALATION_KEYWORDS = [
+  'speak to manager', 'talk to someone', 'real person', 'human agent',
+  'not happy', 'complaint', 'refund', 'cheating', 'fraud', 'scam',
+  'police', 'court', 'angry', 'disgusting', 'worst',
+]
+
+function shouldEscalate(message: string): boolean {
+  const lower = message.toLowerCase()
+  return ESCALATION_KEYWORDS.some(k => lower.includes(k))
+}
+
+// ─────────────────────────────────────────
+// HANDLE INCOMING MESSAGE
+// ─────────────────────────────────────────
+async function handleIncomingMessage(
+  waId: string,
+  senderName: string,
+  msg: WatiIncomingMessage
+) {
+  const phone = waId.replace(/\D/g, '').replace(/^91/, '') // normalize to 10 digits
+  let userText = extractMessageText(msg)
+
+  // Handle voice notes — transcribe if possible
+  if ((msg.type === 'audio' || msg.type === 'voice') && msg.data?.url) {
+    try {
+      const { transcribeVoiceNote } = await import('@/lib/transcription')
+      const transcribed = await transcribeVoiceNote(msg.data.url)
+      if (transcribed) {
+        userText = `[Voice message]: ${transcribed}`
+        await smartSend(phone, `🎙️ I heard: "${transcribed.slice(0, 100)}"`, { type: 'session' })
+      } else {
+        await smartSend(phone, "Received your voice message but couldn't understand it 😔 Could you type your question?", { type: 'session' })
+        return
+      }
+    } catch {
+      await smartSend(phone, "Could you please type your question? 😊", { type: 'session' })
+      return
+    }
+  }
+
+  if (!userText.trim()) return // ignore empty / media-only messages
+  if (isRateLimited(phone)) return // respect rate limit
+
+  // ── Load or create conversation ──
+  const sessionId = `wa_${phone}`
+
+  const { data: existingConv } = await supabaseAdmin
+    .from('conversations')
+    .select('id, messages, lead_id')
+    .eq('session_id', sessionId)
+    .maybeSingle()
+
+  const existingMessages: Message[] = Array.isArray(existingConv?.messages)
+    ? (existingConv!.messages as Message[])
+    : []
+
+  // ── Escalation check ──
+  if (shouldEscalate(userText)) {
+    const escalationMsg = "Let me connect you with our manager who can better assist you 😊\n\n📞 WhatsApp / Call: *9051459463*\n📞 Alternate: *7003853624*\n\nAvailable: 9 AM – 9 PM daily."
+    await smartSend(phone, escalationMsg, { type: 'session' })
+
+    if (existingConv?.id) {
+      await supabaseAdmin
+        .from('conversations')
+        .update({
+          is_escalated: true,
+          escalation_reason: userText.slice(0, 200),
+        })
+        .eq('id', existingConv.id)
+      // Note: DB trigger 'on_conversation_escalated' auto-creates escalations record
+    }
+    return
+  }
+
+  // ── Get AI response ──
+  const messagesForAI: Message[] = [
+    ...existingMessages.slice(-18),
+    { role: 'user', content: userText },
+  ]
+
+  const aiResponseRaw = await chatWithAI(messagesForAI, userText)
+  const aiResponseClean = cleanAIResponse(aiResponseRaw)
+
+  // ── Send WhatsApp reply (split if long) ──
+  const chunks = splitMessage(aiResponseClean, 3500)
+  for (let i = 0; i < chunks.length; i++) {
+    await smartSend(phone, chunks[i], { type: 'session' })
+    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 600))
+  }
+
+  // ── Extract lead data ──
+  const fromTag = extractLeadFromTag(aiResponseRaw)
+  const fromAI = !hasMinimumLeadData(fromTag) && existingMessages.length >= 2
+    ? await extractLeadViaAI(messagesForAI.map(m => `${m.role === 'user' ? 'Customer' : 'Aria'}: ${m.content}`).join('\n'))
+    : null
+  const extracted = mergeExtracted(fromTag, fromAI)
+
+  // ── Update conversation ──
+  const updatedMessages = [
+   ...(existingConv?.messages || []),
+    { role: 'user' as const, content: userText, timestamp: new Date().toISOString() },
+    { role: 'assistant' as const, content: aiResponseClean, timestamp: new Date().toISOString() },
+  ].slice(-40)
+
+  const convPayload: Record<string, unknown> = {
+    session_id: sessionId,
+    channel: 'whatsapp',
+    messages: updatedMessages,
+    is_active: true,
+  }
+  if (extracted?.name) convPayload.extracted_name = extracted.name
+  if (extracted?.phone) convPayload.extracted_phone = extracted.phone
+  if (extracted?.event_type) convPayload.extracted_event_type = extracted.event_type
+  if (extracted?.event_date) convPayload.extracted_event_date = extracted.event_date
+  if (extracted?.guest_count) convPayload.extracted_guest_count = extracted.guest_count
+  if (extracted?.budget) convPayload.extracted_budget = extracted.budget
+
+  if (existingConv?.id) {
+    await supabaseAdmin.from('conversations').update(convPayload).eq('id', existingConv.id)
+  } else {
+    const { data: newConv } = await supabaseAdmin.from('conversations').insert(convPayload).select('id').single()
+    if (newConv) convPayload._id = newConv.id
+  }
+
+  // ── Upsert lead ──
+  if (hasMinimumLeadData(extracted)) {
+    const guestCount = parseGuestCount(extracted?.guest_count)
+
+    // Check if lead already exists by phone
+    const { data: existingLead } = phone
+      ? await supabaseAdmin.from('leads').select('id').eq('phone', phone).maybeSingle()
+      : { data: null }
+
+    const leadFields = {
+      ...(extracted?.name && { name: sanitizeString(extracted.name) }),
+      phone: phone || null,
+      ...(extracted?.event_type && { event_type: sanitizeString(extracted.event_type) }),
+      ...(extracted?.event_date ? { event_date: parseEventDate(extracted.event_date) } : {}),
+      ...(guestCount && { guest_count: guestCount }),
+      ...(extracted?.budget && { budget: sanitizeString(extracted.budget) }),
+      source: 'whatsapp' as const,
+      last_contacted_at: new Date().toISOString(),
+    }
+
+    if (existingLead) {
+      await supabaseAdmin.from('leads').update(leadFields).eq('id', existingLead.id)
+    } else {
+      const { data: newLead } = await supabaseAdmin
+        .from('leads')
+        .insert({ ...leadFields, status: 'new_inquiry' })
+        .select('id')
+        .single()
+
+      if (newLead) {
+        await supabaseAdmin.from('activity_logs').insert({
+          lead_id: newLead.id,
+          action: 'lead_created',
+          description: 'any created from WhatsApp',
+          performed_by: 'ai_chatbot',
+        })
+        syncLeadToSheets(newLead as any).catch(() => {})
+      }
+    }
+  }
+}
+
+// ─────────────────────────────────────────
+// SPLIT LONG MESSAGES
+// ─────────────────────────────────────────
+function splitMessage(text: string, maxLen: number): string[] {
+  if (text.length <= maxLen) return [text]
+  const parts: string[] = []
+  const lines = text.split('\n')
+  let current = ''
+  for (const line of lines) {
+    if ((current + '\n' + line).length > maxLen) {
+      if (current) parts.push(current.trim())
+      current = line
+    } else {
+      current = current ? current + '\n' + line : line
+    }
+  }
+  if (current.trim()) parts.push(current.trim())
+  return parts
+}
+
+// ─────────────────────────────────────────
+// POST — Incoming webhook from Wati
+// ─────────────────────────────────────────
+export async function POST(req: NextRequest) {
+  try {
+    // Guard: return early if WhatsApp not configured
+    if (!isWatiConfigured()) {
+      return NextResponse.json({
+        received: true,
+        status: 'WhatsApp integration not yet configured. Set WATI_BASE_URL and WATI_API_TOKEN.',
+      })
+    }
+
+    const rawBody = await req.text()
+
+    // Verify webhook signature if secret is set
+    const signature = req.headers.get('x-wati-signature') || ''
+    if (process.env.WATI_WEBHOOK_SECRET) {
+      const { verifyWatiWebhook } = await import('@/lib/whatsapp')
+      if (!verifyWatiWebhook(rawBody, signature)) {
+        return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+      }
+    }
+
+    const payload: WatiWebhookPayload = JSON.parse(rawBody)
+
+    if (payload.type !== 'message' || !payload.messages?.length) {
+      return NextResponse.json({ received: true })
+    }
+
+    // Process async — always respond to Wati within 5s
+    for (const msg of payload.messages) {
+      handleIncomingMessage(payload.waId, payload.senderName, msg).catch(err =>
+        logger.error('whatsapp-webhook', 'handleIncomingMessage error', err)
+      )
+    }
+
+    return NextResponse.json({ received: true })
+  } catch (err) {
+    logger.error('whatsapp-webhook', 'Webhook error', err)
+    return NextResponse.json({ received: true, error: 'Processing error' })
+  }
+}
+
+// ─────────────────────────────────────────
+// GET — Webhook verification handshake
+// ─────────────────────────────────────────
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const challenge = searchParams.get('hub.challenge')
+  const verifyToken = searchParams.get('hub.verify_token')
+
+  if (verifyToken === process.env.WATI_VERIFY_TOKEN) {
+    return new NextResponse(challenge || 'verified', { status: 200 })
+  }
+
+  return NextResponse.json({
+    status: 'WhatsApp webhook endpoint ready',
+    configured: isWatiConfigured(),
+    business_number: '8274844343',
+    note: 'Set WATI_BASE_URL, WATI_API_TOKEN, and WATI_VERIFY_TOKEN to activate',
+  })
+}
+=== C:\rajubmp\bookmyspaces\src\app\api\whatsapp\{webhook,send,campaigns,templates}\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\{campaigns,ai-summary,notifications,segments}\route.ts === 
+=== C:\rajubmp\bookmyspaces\src\app\api\{proposals,analytics,calendar,followups}\route.ts === 

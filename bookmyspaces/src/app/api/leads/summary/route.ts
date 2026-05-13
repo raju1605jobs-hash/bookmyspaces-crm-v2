@@ -1,15 +1,13 @@
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
+export const maxDuration = 30
+
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 
-const supabaseAdmin = getSupabaseAdmin()
-
-export const runtime = 'nodejs'
-export const maxDuration = 30
-
-// POST — generate and store AI lead summary
 export async function POST(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const { lead_id } = await req.json()
     if (!lead_id) return NextResponse.json({ error: 'lead_id required' }, { status: 400 })
@@ -22,20 +20,11 @@ export async function POST(req: NextRequest) {
     ])
 
     const lead = leadRes.data
-    if (!lead) return NextResponse.json({ error: 'any not found' }, { status: 404 })
+    if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
 
-    const convMessages = (convsRes.data || [])
-      .flatMap((c: any) => (c.messages || []).slice(-20))
-      .map((m: any) => `${m.role === 'user' ? 'Customer' : 'Aria'}: ${m.content}`)
-      .join('\n')
-
-    const activityText = (logsRes.data || [])
-      .map((a: any) => `[${new Date(a.created_at).toLocaleDateString('en-IN')}] ${a.action}: ${a.description}`)
-      .join('\n')
-
-    const proposalText = (propsRes.data || [])
-      .map((p: any) => `${p.proposal_number} — ${p.package_name} Rs${p.total_price?.toLocaleString('en-IN')} (${p.status})`)
-      .join('\n')
+    const convMessages = (convsRes.data || []).flatMap((c: any) => (c.messages || []).slice(-20)).map((m: any) => `${m.role === 'user' ? 'Customer' : 'Aria'}: ${m.content}`).join('\n')
+    const activityText = (logsRes.data || []).map((a: any) => `[${new Date(a.created_at).toLocaleDateString('en-IN')}] ${a.action}: ${a.description}`).join('\n')
+    const proposalText = (propsRes.data || []).map((p: any) => `${p.proposal_number} — ${p.package_name} Rs${p.total_price?.toLocaleString('en-IN')} (${p.status})`).join('\n')
 
     const context = `LEAD: ${lead.name || 'Unknown'} | Phone: ${lead.phone || '-'} | Email: ${lead.email || '-'}
 Event: ${lead.event_type || '-'} | Date: ${lead.event_date || '-'} | Guests: ${lead.guest_count || '-'}
@@ -58,35 +47,15 @@ ${proposalText || 'None created'}`
     const response = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 400,
-      messages: [{
-        role: 'user',
-        content: `You are a CRM analyst for BookMySpaces, a premium event venue in Kolkata.
-Analyze this lead and return ONLY valid JSON, no explanation.
-
-${context}
-
-Return exactly:
-{"event_type":"","estimated_budget":"","urgency":"high/medium/low","lead_quality":"hot/warm/cold","key_requirements":[],"objections":[],"conversion_likelihood":"high/medium/low","recommended_action":"","summary":"2-3 sentence plain English summary"}`
-      }]
+      messages: [{ role: 'user', content: `You are a CRM analyst for BookMySpaces, a premium event venue in Kolkata.\nAnalyze this lead and return ONLY valid JSON, no explanation.\n\n${context}\n\nReturn exactly:\n{"event_type":"","estimated_budget":"","urgency":"high/medium/low","lead_quality":"hot/warm/cold","key_requirements":[],"objections":[],"conversion_likelihood":"high/medium/low","recommended_action":"","summary":"2-3 sentence plain English summary"}` }]
     })
 
     const text = response.content[0].type === 'text' ? response.content[0].text : '{}'
     let parsed: Record<string, unknown> = {}
     try { parsed = JSON.parse((text.match(/\{[\s\S]*\}/) || ['{}'])[0]) } catch { parsed = { summary: text.slice(0, 300) } }
 
-    // Store summary text on lead
-    await supabaseAdmin.from('leads').update({
-      inquiry_summary: (parsed.summary as string) || text.slice(0, 500)
-    }).eq('id', lead_id)
-
-    // Log activity
-    await supabaseAdmin.from('activity_logs').insert({
-      lead_id,
-      action: 'ai_summary_generated',
-      description: 'AI lead intelligence summary generated',
-      performed_by: 'system',
-      metadata: parsed,
-    })
+    await supabaseAdmin.from('leads').update({ inquiry_summary: (parsed.summary as string) || text.slice(0, 500) }).eq('id', lead_id)
+    await supabaseAdmin.from('activity_logs').insert({ lead_id, action: 'ai_summary_generated', description: 'AI lead intelligence summary generated', performed_by: 'system', metadata: parsed })
 
     return NextResponse.json({ summary: parsed })
   } catch (err) {
@@ -95,8 +64,8 @@ Return exactly:
   }
 }
 
-// GET — fetch lead context (lead + conversations + activities + proposals)
 export async function GET(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   const { searchParams } = new URL(req.url)
   const leadId = searchParams.get('lead_id')
   if (!leadId) return NextResponse.json({ error: 'lead_id required' }, { status: 400 })
@@ -108,10 +77,5 @@ export async function GET(req: NextRequest) {
     supabaseAdmin.from('proposals').select('id,proposal_number,package_name,total_price,status,created_at').eq('lead_id', leadId).order('created_at', { ascending: false }),
   ])
 
-  return NextResponse.json({
-    lead: leadRes.data,
-    conversations: convsRes.data || [],
-    activities: logsRes.data || [],
-    proposals: propsRes.data || [],
-  })
+  return NextResponse.json({ lead: leadRes.data, conversations: convsRes.data || [], activities: logsRes.data || [], proposals: propsRes.data || [] })
 }
