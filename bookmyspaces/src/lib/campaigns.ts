@@ -1,12 +1,5 @@
-// ═══════════════════════════════════════════════════════════
-// FESTIVAL CAMPAIGN GENERATOR
-// Auto-generates festival greeting messages using AI
-// ═══════════════════════════════════════════════════════════
-
 import Anthropic from '@anthropic-ai/sdk'
 import { getSupabaseAdmin } from './supabase'
-
-const supabaseAdmin = getSupabaseAdmin()
 
 let _anthropic: Anthropic | null = null
 function getAnthropic() {
@@ -22,9 +15,6 @@ export interface FestivalMessage {
   full_message: string
 }
 
-// ─────────────────────────────────────────
-// GENERATE FESTIVAL CAMPAIGN MESSAGE
-// ─────────────────────────────────────────
 export async function generateFestivalMessage(
   festival: string,
   offerDetails?: string
@@ -56,7 +46,7 @@ Return ONLY the message text, no preamble.`
     ? response.content[0].text
     : `Wishing you a wonderful ${festival}! Celebrate with your loved ones at BookMySpaces. WhatsApp: 9051459463 🎉`
 
-  const cta = `📲 WhatsApp: 9051459463`
+  const cta = `📱 WhatsApp: 9051459463`
   const fullMessage = message.includes('9051459463') ? message : `${message}\n\n${cta}`
 
   return {
@@ -68,10 +58,8 @@ Return ONLY the message text, no preamble.`
   }
 }
 
-// ─────────────────────────────────────────
-// GET UPCOMING FESTIVALS (next 30 days)
-// ─────────────────────────────────────────
 export async function getUpcomingFestivals(daysAhead = 30) {
+  const supabaseAdmin = getSupabaseAdmin()
   const until = new Date(Date.now() + daysAhead * 86400000).toISOString().split('T')[0]
   const today = new Date().toISOString().split('T')[0]
 
@@ -85,10 +73,6 @@ export async function getUpcomingFestivals(daysAhead = 30) {
   return data || []
 }
 
-// ─────────────────────────────────────────
-// SMART SEGMENT BUILDER
-// Builds recipient lists based on filters
-// ─────────────────────────────────────────
 export interface SegmentFilter {
   status?: string[]
   source?: string[]
@@ -96,10 +80,12 @@ export interface SegmentFilter {
   event_type?: string
   venue?: string
   is_vip?: boolean
-  days_since_inquiry?: number // e.g. 30 = inquired in last 30 days
+  days_since_inquiry?: number
 }
 
 export async function buildSegment(filter: SegmentFilter) {
+  const supabaseAdmin = getSupabaseAdmin()
+
   let query = supabaseAdmin
     .from('leads')
     .select('id, name, phone, email, event_type, status, ai_score, source')
@@ -109,27 +95,21 @@ export async function buildSegment(filter: SegmentFilter) {
   if (filter.status?.length) {
     query = query.in('status', filter.status)
   }
-
   if (filter.source?.length) {
     query = query.in('source', filter.source)
   }
-
   if (filter.min_score) {
     query = query.gte('ai_score', filter.min_score)
   }
-
   if (filter.event_type) {
     query = query.ilike('event_type', `%${filter.event_type}%`)
   }
-
   if (filter.venue) {
     query = query.eq('venue', filter.venue)
   }
-
   if (filter.is_vip === true) {
     query = query.eq('is_vip', true)
   }
-
   if (filter.days_since_inquiry) {
     const since = new Date(Date.now() - filter.days_since_inquiry * 86400000).toISOString()
     query = query.gte('created_at', since)
@@ -139,9 +119,6 @@ export async function buildSegment(filter: SegmentFilter) {
   return data || []
 }
 
-// ─────────────────────────────────────────
-// GENERATE CUSTOM CAMPAIGN MESSAGE WITH AI
-// ─────────────────────────────────────────
 export async function generateCampaignMessage(
   type: string,
   context: string,
