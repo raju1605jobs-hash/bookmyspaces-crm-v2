@@ -1,31 +1,27 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, SupabaseClient } from '@supabase/supabase-js'
 
-function requireEnv(name: string) {
-  const value = process.env[name]
+let _admin: SupabaseClient | null = null
+let _browser: SupabaseClient | null = null
 
-  if (!value) {
-    throw new Error(`${name} is missing`)
-  }
-
-  return value
+export function getSupabase(): SupabaseClient {
+  if (_browser) return _browser
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!url || !key) throw new Error('NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is missing')
+  _browser = createClient(url, key)
+  return _browser
 }
 
-export function getSupabase() {
-  return createClient(
-    requireEnv('NEXT_PUBLIC_SUPABASE_URL'),
-    requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY')
-  )
-}
-
-export function getSupabaseAdmin() {
-  return createClient(
-    requireEnv('NEXT_PUBLIC_SUPABASE_URL'),
-    requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
-    {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-    }
-  )
+export function getSupabaseAdmin(): SupabaseClient {
+  if (_admin) return _admin
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) throw new Error('NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing')
+  _admin = createClient(url, key, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  })
+  return _admin
 }
