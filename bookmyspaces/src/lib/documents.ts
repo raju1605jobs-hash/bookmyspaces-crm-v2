@@ -2,27 +2,20 @@ import { getSupabaseAdmin } from './supabase'
 import { logger } from './logger'
 import { generateEmbedding, chunkText } from './ai'
 
-const supabaseAdmin = getSupabaseAdmin()
-
-// ─────────────────────────────────────────
-// DOCUMENT PROCESSING — Build Knowledge Base
-// ─────────────────────────────────────────
-
 export async function processTextIntoKnowledgeBase(
   text: string,
   sourceFile: string,
   sourceType: 'pdf' | 'docx' | 'txt' | 'manual',
   category: 'packages' | 'faq' | 'menu' | 'policies' | 'branding' | 'scripts' | 'general'
 ): Promise<number> {
+  const supabaseAdmin = getSupabaseAdmin()
   const chunks = chunkText(text, 800, 100)
   let processedCount = 0
 
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i]
-
     try {
       const embedding = await generateEmbedding(chunk)
-
       const { error } = await supabaseAdmin.from('knowledge_chunks').insert({
         source_file: sourceFile,
         source_type: sourceType,
@@ -32,14 +25,11 @@ export async function processTextIntoKnowledgeBase(
         embedding,
         metadata: { total_chunks: chunks.length },
       })
-
       if (error) {
         logger.error('documents', `Failed to insert chunk ${i}`, error)
       } else {
         processedCount++
       }
-
-      // Small delay to avoid OpenAI rate limits
       await new Promise(r => setTimeout(r, 50))
     } catch (err) {
       logger.error('documents', `Error processing chunk ${i}`, err)
@@ -49,26 +39,18 @@ export async function processTextIntoKnowledgeBase(
   return processedCount
 }
 
-// Delete all chunks for a source file
 export async function deleteKnowledgeBySource(sourceFile: string): Promise<void> {
-  await supabaseAdmin
-    .from('knowledge_chunks')
-    .delete()
-    .eq('source_file', sourceFile)
+  const supabaseAdmin = getSupabaseAdmin()
+  await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', sourceFile)
 }
 
-// Get all documents
 export async function getDocuments() {
-  const { data, error } = await supabaseAdmin
-    .from('documents')
-    .select('*')
-    .order('created_at', { ascending: false })
-
+  const supabaseAdmin = getSupabaseAdmin()
+  const { data, error } = await supabaseAdmin.from('documents').select('*').order('created_at', { ascending: false })
   if (error) throw error
   return data
 }
 
-// Seed knowledge base from business data (static)
 export const STATIC_KNOWLEDGE: Array<{
   text: string
   source: string
@@ -84,7 +66,7 @@ Private Rooftop Events for 30-70 Guests
 SILVER PACKAGE — ₹42,000 (Up to 60 Guests)
 Includes: Rooftop venue (4 hours), Basic decoration, Buffet dinner (veg + non-veg), Sound system & music, Basic lighting, Event support staff
 
-GOLD PACKAGE — ₹50,000 (Up to 60 Guests) ⭐ MOST POPULAR
+GOLD PACKAGE — ₹50,000 (Up to 60 Guests) ✅ MOST POPULAR
 Includes: Rooftop venue (4 hours), Premium decoration, Buffet dinner (expanded menu), Sound system + microphone, Party lighting setup, Cake table setup, Event support staff
 
 PLATINUM PACKAGE — ₹59,500 (Up to 60 Guests)
@@ -129,31 +111,22 @@ Perfect for: Birthday Parties, Engagement Ceremonies, Anniversary Celebrations, 
     text: `FREQUENTLY ASKED QUESTIONS:
 
 Q: Is advance booking required?
-A: Yes, especially for weekends. Weekend dates fill fast — advance booking strongly recommended. A small advance secures your slot.
+A: Yes, especially for weekends. Weekend dates fill fast — advance booking strongly recommended.
 
 Q: Is the venue couple-friendly?
 A: Yes, both Skyline Serenity and Monurama are couple-friendly properties.
 
 Q: Can I arrange food through you?
-A: Yes! We offer buffet dinners with both veg and non-veg options. Food packages can be customized based on guest count, preferences, and occasion.
+A: Yes! We offer buffet dinners with both veg and non-veg options.
 
 Q: Can I get a site visit before booking?
-A: Absolutely! You're welcome to visit and see the venue. Please call ahead to schedule: 9051459463.
-
-Q: What's the cancellation policy?
-A: Please contact us directly for cancellation details — it varies by package and date.
-
-Q: Do you allow outside food/catering?
-A: Generally not for event packages (food is included), but please contact us for specific requirements.
+A: Absolutely! Please call ahead to schedule: 9051459463.
 
 Q: What payment modes are accepted?
 A: UPI, bank transfer. Advance required to confirm booking.
 
 Q: Is parking available?
 A: Yes, parking is available. Please confirm while booking.
-
-Q: Can I customize decorations?
-A: Yes! Theme decoration is available as an add-on from ₹5,000–₹12,000. We work with reliable decorators.
 
 Q: What is the maximum guest capacity?
 A: The rooftop venue can accommodate up to 70 guests comfortably.`,
@@ -170,10 +143,8 @@ A: The rooftop venue can accommodate up to 70 guests comfortably.`,
 
 IMPORTANT POLICIES:
 - Dates are not blocked without advance payment
-- Weekend slots (Saturday, Sunday) fill very fast — book early
+- Weekend slots fill very fast — book early
 - Food menu customization must be confirmed 3-5 days before event
-- Photography add-on must be booked in advance
-- Exact timing must be confirmed while booking
 
 CONTACT:
 WhatsApp / Call: 9051459463 or 7003853624
@@ -189,13 +160,11 @@ Perfect for: Dates, Friend hangouts, Evening gatherings, Small celebrations
 PRIVATE DINING ROOM:
 Packages starting from ₹4,999
 Ideal for: Couple dinners, Mini birthday surprises, Small intimate celebrations, Proposals
-Please share date, time & number of guests to get exact pricing.
 
 LUNCH/DINNER EVENTS:
 Food can be arranged for events. Menu options:
 - Veg / Non-veg / Both available
 - Buffet format for larger groups
-- Set menu for smaller intimate events
-Food pricing is confirmed after discussing requirements with our kitchen team.`,
+- Set menu for smaller intimate events`,
   },
 ]

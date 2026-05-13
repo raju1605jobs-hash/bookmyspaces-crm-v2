@@ -3,8 +3,6 @@ import OpenAI from 'openai'
 import { getSupabaseAdmin } from './supabase'
 import { logger } from './logger'
 
-const supabaseAdmin = getSupabaseAdmin()
-
 // Lazy initialization — prevents build-time crashes
 let _anthropic: Anthropic | null = null
 let _openai: OpenAI | null = null
@@ -58,12 +56,10 @@ After your natural reply, append this EXACTLY (one line, valid JSON):
 RULES FOR THE TAG:
 - Include ALL 8 fields every single time, even if empty string
 - phone: 10-digit Indian mobile only (e.g. "9051459463") — empty string if uncertain
-- guest_count: digits only as string (e.g. "50") — empty string if uncertain  
+- guest_count: digits only as string (e.g. "50") — empty string if uncertain
 - venue: "skyline" or "monurama" or empty string
 - Only put what customer EXPLICITLY said — never guess
 - This tag is INVISIBLE to the customer — it is backend metadata only`
-
-// ─── VALIDATION ───────────────────────────────────────────
 
 export function isValidIndianPhone(phone: string): boolean {
   const c = phone.replace(/[\s\-\(\)\+]/g, '')
@@ -86,29 +82,17 @@ export function sanitizeString(val: unknown, maxLen = 255): string | null {
   return c.slice(0, maxLen)
 }
 
-
-/** 
- * Attempt to parse a natural language date into ISO format (YYYY-MM-DD).
- * Returns null if the date cannot be reliably parsed.
- * The leads.event_date column is DATE type — only valid ISO dates can be stored.
- */
 export function parseEventDate(val: unknown): string | null {
   if (!val || typeof val !== 'string') return null
   const s = val.trim()
   if (!s) return null
-
-  // Already ISO format
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
-
-  // Try native Date parsing for common formats
   try {
     const d = new Date(s)
     if (!isNaN(d.getTime()) && d.getFullYear() > 2020 && d.getFullYear() < 2030) {
       return d.toISOString().split('T')[0]
     }
   } catch {}
-
-  // Cannot safely parse — return null (store in extracted_event_date TEXT instead)
   return null
 }
 
@@ -118,8 +102,6 @@ export function parseGuestCount(val: unknown): number | null {
   if (isNaN(num) || num < 1 || num > 5000) return null
   return num
 }
-
-// ─── EXTRACTED LEAD TYPE ──────────────────────────────────
 
 export interface ExtractedLeadData {
   name: string | null
@@ -132,13 +114,9 @@ export interface ExtractedLeadData {
   venue: string | null
 }
 
-// ─── STRATEGY 1: Parse structured tag ────────────────────
-
 export function extractLeadFromTag(aiResponse: string): ExtractedLeadData | null {
-  // Use [\s\S] instead of . to match across newlines
   const match = aiResponse.match(/<<LEAD:([\s\S]*?)>>/)
   if (!match) return null
-
   try {
     const raw = JSON.parse(match[1].trim())
     return {
@@ -156,8 +134,6 @@ export function extractLeadFromTag(aiResponse: string): ExtractedLeadData | null
   }
 }
 
-// ─── STRATEGY 2: AI extraction fallback ──────────────────
-
 export async function extractLeadViaAI(conversationText: string): Promise<ExtractedLeadData | null> {
   try {
     const response = await getAnthropic().messages.create({
@@ -165,22 +141,12 @@ export async function extractLeadViaAI(conversationText: string): Promise<Extrac
       max_tokens: 200,
       messages: [{
         role: 'user',
-        content: `Extract info from this conversation. Return ONLY JSON, no explanation.
-
-Conversation:
-${conversationText.slice(-2000)}
-
-JSON structure (null for unknown):
-{"name":null,"phone":null,"email":null,"event_type":null,"event_date":null,"guest_count":null,"budget":null,"venue":null}
-
-Rules: phone=10-digit Indian only or null, guest_count=number string or null, venue="skyline"/"monurama"/null, only explicit info`,
+        content: `Extract info from this conversation. Return ONLY JSON, no explanation.\n\nConversation:\n${conversationText.slice(-2000)}\n\nJSON structure (null for unknown):\n{"name":null,"phone":null,"email":null,"event_type":null,"event_date":null,"guest_count":null,"budget":null,"venue":null}\n\nRules: phone=10-digit Indian only or null, guest_count=number string or null, venue="skyline"/"monurama"/null, only explicit info`,
       }],
     })
-
     const text = response.content[0].type === 'text' ? response.content[0].text : ''
     const jsonMatch = text.match(/\{[\s\S]*\}/)
     if (!jsonMatch) return null
-
     const raw = JSON.parse(jsonMatch[0])
     return {
       name: sanitizeString(raw.name),
@@ -196,8 +162,6 @@ Rules: phone=10-digit Indian only or null, guest_count=number string or null, ve
     return null
   }
 }
-
-// ─── MERGE: Prefer tag data, fill gaps with AI data ──────
 
 export function mergeExtracted(
   fromTag: ExtractedLeadData | null,
@@ -222,16 +186,12 @@ export function hasMinimumLeadData(data: ExtractedLeadData | null): boolean {
   return !!(data.name || data.phone)
 }
 
-// ─── CLEAN AI RESPONSE (strip metadata tag) ──────────────
-
 export function cleanAIResponse(response: string): string {
   return response
     .replace(/<<LEAD:[\s\S]*?>>/g, '')
-    .replace(/<<EXTRACTED_DATA:[\s\S]*?>>/g, '') // legacy support
+    .replace(/<<EXTRACTED_DATA:[\s\S]*?>>/g, '')
     .trim()
 }
-
-// ─── EMBEDDINGS ──────────────────────────────────────────
 
 export async function generateEmbedding(text: string): Promise<number[]> {
   const response = await getOpenAI().embeddings.create({
@@ -241,11 +201,10 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   return response.data[0].embedding
 }
 
-// ─── RAG RETRIEVAL ────────────────────────────────────────
-
 export async function retrieveRelevantKnowledge(query: string, limit = 4): Promise<string> {
   try {
     if (!process.env.OPENAI_API_KEY) return ''
+    const supabaseAdmin = getSupabaseAdmin()
     const embedding = await generateEmbedding(query)
     const { data, error } = await supabaseAdmin.rpc('match_knowledge_chunks', {
       query_embedding: embedding,
@@ -259,24 +218,20 @@ export async function retrieveRelevantKnowledge(query: string, limit = 4): Promi
       )
       .join('\n\n---\n\n')
   } catch {
-    return '' // RAG failure is non-fatal
+    return ''
   }
 }
-
-// ─── MESSAGE TYPE ─────────────────────────────────────────
 
 export interface Message {
   role: 'user' | 'assistant'
   content: string
 }
 
-// ─── MAIN CHAT FUNCTION ───────────────────────────────────
-
 const FALLBACK_MESSAGE =
-  "I'm having a brief connectivity issue 😔 Please WhatsApp us at *9051459463* and we'll respond immediately!"
+  "I'm having a brief connectivity issue 🙏 Please WhatsApp us at *9051459463* and we'll respond immediately!"
 
 export async function chatWithAI(messages: Message[], userQuery: string): Promise<string> {
-  const cappedMessages = messages.slice(-20) // prevent token overflow
+  const cappedMessages = messages.slice(-20)
   const knowledgeContext = await retrieveRelevantKnowledge(userQuery)
 
   const systemWithContext = knowledgeContext
@@ -310,8 +265,6 @@ export async function chatWithAI(messages: Message[], userQuery: string): Promis
   }
 }
 
-// ─── CONVERSATION SUMMARY ────────────────────────────────
-
 export async function generateConversationSummary(messages: Message[]): Promise<string> {
   try {
     const convo = messages
@@ -333,8 +286,6 @@ export async function generateConversationSummary(messages: Message[]): Promise<
     return 'Summary generation failed.'
   }
 }
-
-// ─── TEXT CHUNKING ────────────────────────────────────────
 
 export function chunkText(text: string, chunkSize = 800, overlap = 100): string[] {
   const chunks: string[] = []
