@@ -1,15 +1,11 @@
 // ═══════════════════════════════════════════════════════════
 // MESSAGE QUEUE — Rate limiting + anti-spam
-// Works in mock mode when WhatsApp is not yet configured
 // ═══════════════════════════════════════════════════════════
 
 import { getSupabaseAdmin } from './supabase'
 import { logger } from './logger'
 import { sendWhatsAppMessage, sendTemplateMessage, isWatiConfigured } from './whatsapp'
 
-const supabaseAdmin = getSupabaseAdmin()
-
-// ─── QUEUE TABLE (optional — created in migration 002) ────
 export interface QueuedMessage {
   phone: string
   message: string
@@ -21,6 +17,7 @@ export interface QueuedMessage {
 }
 
 export async function enqueueMessage(msg: QueuedMessage): Promise<string | null> {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const { data, error } = await supabaseAdmin
       .from('message_queue')
@@ -46,7 +43,6 @@ export async function enqueueMessage(msg: QueuedMessage): Promise<string | null>
   }
 }
 
-// ─── IN-MEMORY RATE LIMITER ───────────────────────────────
 const phoneLastSent: Map<string, number> = new Map()
 const MIN_DELAY_MS = 1500
 
@@ -60,8 +56,8 @@ export function markSent(phone: string): void {
   phoneLastSent.set(phone, Date.now())
 }
 
-// ─── ANTI-SPAM: check recent contact ─────────────────────
 export async function wasRecentlyContacted(phone: string, withinMinutes = 60): Promise<boolean> {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const since = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString()
     const { count } = await supabaseAdmin
@@ -76,7 +72,6 @@ export async function wasRecentlyContacted(phone: string, withinMinutes = 60): P
   }
 }
 
-// ─── SMART SEND ───────────────────────────────────────────
 export async function smartSend(
   phone: string,
   message: string,
@@ -87,7 +82,6 @@ export async function smartSend(
     forceSpamCheck?: boolean
   } = {}
 ): Promise<boolean> {
-  // If WhatsApp isn't configured, log and return false gracefully
   if (!isWatiConfigured()) {
     logger.info('queue', 'WhatsApp not configured — message skipped (mock mode)', { preview: message.slice(0, 60) })
     return false
