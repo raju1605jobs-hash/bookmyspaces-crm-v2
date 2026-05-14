@@ -203,25 +203,43 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 
 export async function retrieveRelevantKnowledge(query: string, limit = 4): Promise<string> {
   try {
-    if (!process.env.OPENAI_API_KEY) return ''
     const supabaseAdmin = getSupabaseAdmin()
-    const embedding = await generateEmbedding(query)
-    const { data, error } = await supabaseAdmin.rpc('match_knowledge_chunks', {
-      query_embedding: embedding,
-      match_threshold: 0.65,
-      match_count: limit,
-    })
+
+    const keywords = query
+      .toLowerCase()
+      .split(' ')
+      .filter(w => w.length > 3)
+      .slice(0, 3)
+
+    if (!keywords.length) return ''
+
+    // Simple text search instead of vector search
+    const { data, error } = await supabaseAdmin
+      .from('knowledge_chunks')
+      .select('content, source_file, category')
+      .or(
+        keywords
+          .map(k => `content.ilike.%${k}%`)
+          .join(',')
+      )
+      .limit(limit)
+
     if (error || !data?.length) return ''
+
     return data
-      .map((c: { content: string; source_file: string; category: string }) =>
-        `[${(c.category || 'INFO').toUpperCase()} — ${c.source_file}]\n${c.content}`
+      .map(
+        (c: {
+          content: string
+          source_file: string
+          category: string
+        }) =>
+          `[${(c.category || 'INFO').toUpperCase()} — ${c.source_file}]\n${c.content}`
       )
       .join('\n\n---\n\n')
   } catch {
     return ''
   }
 }
-
 export interface Message {
   role: 'user' | 'assistant'
   content: string

@@ -1,79 +1,24 @@
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-export const maxDuration = 60
+export const maxDuration = 30
 
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { STATIC_KNOWLEDGE } from '@/lib/documents'
 import { chunkText } from '@/lib/ai'
-import OpenAI from 'openai'
-
-function getOpenAI() {
-  const key = process.env.OPENAI_API_KEY
-  if (!key) throw new Error('OPENAI_API_KEY is not set')
-  return new OpenAI({ apiKey: key })
-}
-
-async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await getOpenAI().embeddings.create({
-    model: 'text-embedding-3-small',
-    input: text.slice(0, 8000),
-  })
-  return response.data[0].embedding
-}
-
-async function seedOneSource(
-  source: string,
-  text: string,
-  sourceType: 'manual',
-  category: string
-): Promise<{ source: string; chunks: number; error?: string }> {
-  const supabaseAdmin = getSupabaseAdmin()
-
-  // Delete existing
-  await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', source)
-
-  const chunks = chunkText(text, 800, 100)
-  let processedCount = 0
-
-  for (let i = 0; i < chunks.length; i++) {
-    try {
-      const embedding = await generateEmbedding(chunks[i])
-      const { error } = await supabaseAdmin.from('knowledge_chunks').insert({
-        source_file: source,
-        source_type: sourceType,
-        category,
-        content: chunks[i],
-        chunk_index: i,
-        embedding,
-        metadata: { total_chunks: chunks.length },
-      })
-      if (error) {
-        logger.error('knowledge', `Chunk insert error ${source}[${i}]`, error)
-      } else {
-        processedCount++
-      }
-      await new Promise(r => setTimeout(r, 200))
-    } catch (err) {
-      logger.error('knowledge', `Embedding error ${source}[${i}]`, err)
-    }
-  }
-
-  return { source, chunks: processedCount }
-}
 
 export async function GET() {
   const supabaseAdmin = getSupabaseAdmin()
   try {
-    const { data: docs, error: docsError } = await supabaseAdmin
+    const { data: docs, error } = await supabaseAdmin
       .from('documents')
       .select('*')
       .order('created_at', { ascending: false })
     const { count: chunkCount } = await supabaseAdmin
       .from('knowledge_chunks')
       .select('*', { count: 'exact', head: true })
-    if (docsError) throw docsError
+    if (error) throw error
     return NextResponse.json({ documents: docs, total_chunks: chunkCount })
   } catch (error) {
     logger.error('knowledge', 'GET error', error)
@@ -82,70 +27,67 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
-    const { action, text, source, category, name } = body
+    const { action, text, source, category, name, index } = body
 
-    // ── SEED STATIC: process one source at a time to stay under timeout ──
-    if (action === 'seed_static') {
-      const results = []
-      let totalChunks = 0
+    // Seed one source at a time (no embeddings - text search only)
+    if (action === 'seed_one') {
+      const idx = parseInt(index ?? '0')
+      const item = STATIC_KNOWLEDGE[idx]
+      if (!item) return NextResponse.json({ error: 'Invalid index' }, { status: 400 })
 
-      for (const item of STATIC_KNOWLEDGE) {
-        const result = await seedOneSource(item.source, item.text, 'manual', item.category)
-        results.push(result)
-        totalChunks += result.chunks
+      // Delete existing chunks for this source
+      await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', item.source)
+
+      const chunks = chunkText(item.text, 800, 100)
+      let inserted = 0
+
+      for (let i = 0; i < chunks.length; i++) {
+        const { error } = await supabaseAdmin.from('knowledge_chunks').insert({
+          source_file: item.source,
+          source_type: 'manual',
+          category: item.category,
+          content: chunks[i],
+          chunk_index: i,
+          embedding: new Array(1536).fill(0), // zero vector placeholder
+          metadata: { total_chunks: chunks.length },
+        })
+        if (!error) inserted++
       }
 
       return NextResponse.json({
         success: true,
-        message: `Seeded ${totalChunks} chunks from ${STATIC_KNOWLEDGE.length} sources`,
-        results,
-      })
-    }
-
-    // ── SEED SINGLE: seed one source by index (for chunked seeding) ──
-    if (action === 'seed_one') {
-      const index = parseInt(body.index ?? '0')
-      const item = STATIC_KNOWLEDGE[index]
-      if (!item) return NextResponse.json({ error: 'Invalid index' }, { status: 400 })
-
-      const result = await seedOneSource(item.source, item.text, 'manual', item.category)
-      return NextResponse.json({
-        success: true,
-        result,
-        next: index + 1 < STATIC_KNOWLEDGE.length ? index + 1 : null,
+        result: { source: item.source, chunks: inserted },
+        next: idx + 1 < STATIC_KNOWLEDGE.length ? idx + 1 : null,
         total: STATIC_KNOWLEDGE.length,
       })
     }
 
-    // ── ADD CUSTOM TEXT ──
+    // Add custom text
     if (action === 'add_text' && text && source) {
-      const supabaseAdmin = getSupabaseAdmin()
       await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', source)
-      const { data: doc } = await supabaseAdmin
-        .from('documents')
-        .upsert({
-          name: name || source,
-          original_filename: source,
-          file_type: 'txt',
-          category,
-          processed: false,
-          uploaded_by: 'admin',
-        })
-        .select('id')
-        .single()
 
-      const result = await seedOneSource(source, text, 'manual', category || 'general')
-      if (doc) {
-        await supabaseAdmin
-          .from('documents')
-          .update({ processed: true, chunk_count: result.chunks })
-          .eq('id', doc.id)
+      const chunks = chunkText(text, 800, 100)
+      let inserted = 0
+
+      for (let i = 0; i < chunks.length; i++) {
+        const { error } = await supabaseAdmin.from('knowledge_chunks').insert({
+          source_file: source,
+          source_type: 'txt',
+          category: category || 'general',
+          content: chunks[i],
+          chunk_index: i,
+          embedding: new Array(1536).fill(0),
+          metadata: { total_chunks: chunks.length },
+        })
+        if (!error) inserted++
       }
+
       return NextResponse.json({
         success: true,
-        message: `Processed ${result.chunks} chunks from ${source}`,
+        message: `Processed ${inserted} chunks from ${source}`,
       })
     }
 
@@ -153,7 +95,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     logger.error('knowledge', 'POST error', error)
     return NextResponse.json({
-      error: error instanceof Error ? error.message : 'Failed to process knowledge',
+      error: error instanceof Error ? error.message : 'Failed',
     }, { status: 500 })
   }
 }
@@ -165,9 +107,9 @@ export async function DELETE(req: NextRequest) {
     if (!source) return NextResponse.json({ error: 'Source required' }, { status: 400 })
     const supabaseAdmin = getSupabaseAdmin()
     await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', source)
-    return NextResponse.json({ success: true, message: `Deleted knowledge for: ${source}` })
+    return NextResponse.json({ success: true })
   } catch (error) {
     logger.error('knowledge', 'DELETE error', error)
-    return NextResponse.json({ error: 'Failed to delete knowledge' }, { status: 500 })
+    return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }
 }
