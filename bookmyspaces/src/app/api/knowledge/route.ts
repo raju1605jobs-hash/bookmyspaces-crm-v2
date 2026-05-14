@@ -12,12 +12,9 @@ export async function GET() {
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const { data: docs, error } = await supabaseAdmin
-      .from('documents')
-      .select('*')
-      .order('created_at', { ascending: false })
+      .from('documents').select('*').order('created_at', { ascending: false })
     const { count: chunkCount } = await supabaseAdmin
-      .from('knowledge_chunks')
-      .select('*', { count: 'exact', head: true })
+      .from('knowledge_chunks').select('*', { count: 'exact', head: true })
     if (error) throw error
     return NextResponse.json({ documents: docs, total_chunks: chunkCount })
   } catch (error) {
@@ -30,64 +27,97 @@ export async function POST(req: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
-    const { action, text, source, category, name, index } = body
+    const { action, text, source, category, index } = body
 
-    // Seed one source at a time (no embeddings - text search only)
-    if (action === 'seed_one') {
-      const idx = parseInt(index ?? '0')
-      const item = STATIC_KNOWLEDGE[idx]
-      if (!item) return NextResponse.json({ error: 'Invalid index' }, { status: 400 })
+    // ── SEED ALL: delete everything and insert all sources in one batch ──
+    if (action === 'seed_all') {
+      // Delete all existing static knowledge chunks in one go
+      const sources = STATIC_KNOWLEDGE.map(k => k.source)
+      await supabaseAdmin.from('knowledge_chunks').delete().in('source_file', sources)
 
-      // Delete existing chunks for this source
-      await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', item.source)
+      // Build all rows across all sources
+      const allRows: any[] = []
+      for (const item of STATIC_KNOWLEDGE) {
+        const chunks = chunkText(item.text, 800, 100)
+        for (let i = 0; i < chunks.length; i++) {
+          allRows.push({
+            source_file: item.source,
+            source_type: 'manual',
+            category: item.category,
+            content: chunks[i],
+            chunk_index: i,
+            embedding: null,
+            metadata: { total_chunks: chunks.length },
+          })
+        }
+      }
 
-      const chunks = chunkText(item.text, 800, 100)
-      let inserted = 0
-
-      for (let i = 0; i < chunks.length; i++) {
-        const { error } = await supabaseAdmin.from('knowledge_chunks').insert({
-          source_file: item.source,
-          source_type: 'manual',
-          category: item.category,
-          content: chunks[i],
-          chunk_index: i,
-          embedding: new Array(1536).fill(0), // zero vector placeholder
-          metadata: { total_chunks: chunks.length },
-        })
-        if (!error) inserted++
+      // Single batch insert
+      const { error } = await supabaseAdmin.from('knowledge_chunks').insert(allRows)
+      if (error) {
+        logger.error('knowledge', 'Seed all failed', error)
+        return NextResponse.json({ error: error.message }, { status: 500 })
       }
 
       return NextResponse.json({
         success: true,
-        result: { source: item.source, chunks: inserted },
+        message: `Seeded ${allRows.length} chunks from ${STATIC_KNOWLEDGE.length} sources`,
+        total_chunks: allRows.length,
+        sources: STATIC_KNOWLEDGE.length,
+      })
+    }
+
+    // ── SEED ONE (kept for compatibility) ──
+    if (action === 'seed_one') {
+      const idx = Number(index ?? 0)
+      const item = STATIC_KNOWLEDGE[idx]
+      if (!item) return NextResponse.json({ error: 'Invalid index' }, { status: 400 })
+
+      await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', item.source)
+
+      const chunks = chunkText(item.text, 800, 100)
+      const rows = chunks.map((content, i) => ({
+        source_file: item.source,
+        source_type: 'manual',
+        category: item.category,
+        content,
+        chunk_index: i,
+        embedding: null,
+        metadata: { total_chunks: chunks.length },
+      }))
+
+      const { error } = await supabaseAdmin.from('knowledge_chunks').insert(rows)
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+      return NextResponse.json({
+        success: true,
+        result: { source: item.source, chunks: rows.length },
         next: idx + 1 < STATIC_KNOWLEDGE.length ? idx + 1 : null,
         total: STATIC_KNOWLEDGE.length,
       })
     }
 
-    // Add custom text
+    // ── ADD CUSTOM TEXT ──
     if (action === 'add_text' && text && source) {
       await supabaseAdmin.from('knowledge_chunks').delete().eq('source_file', source)
 
       const chunks = chunkText(text, 800, 100)
-      let inserted = 0
+      const rows = chunks.map((content, i) => ({
+        source_file: source,
+        source_type: 'txt',
+        category: category || 'general',
+        content,
+        chunk_index: i,
+        embedding: null,
+        metadata: { total_chunks: chunks.length },
+      }))
 
-      for (let i = 0; i < chunks.length; i++) {
-        const { error } = await supabaseAdmin.from('knowledge_chunks').insert({
-          source_file: source,
-          source_type: 'txt',
-          category: category || 'general',
-          content: chunks[i],
-          chunk_index: i,
-          embedding: new Array(1536).fill(0),
-          metadata: { total_chunks: chunks.length },
-        })
-        if (!error) inserted++
-      }
+      const { error } = await supabaseAdmin.from('knowledge_chunks').insert(rows)
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
       return NextResponse.json({
         success: true,
-        message: `Processed ${inserted} chunks from ${source}`,
+        message: `Processed ${rows.length} chunks from ${source}`,
       })
     }
 
