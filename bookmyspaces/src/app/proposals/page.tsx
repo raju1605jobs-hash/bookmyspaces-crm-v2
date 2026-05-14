@@ -396,7 +396,7 @@ function ProposalBuilderInner() {
                   {createdProposal.share_token && (
                     <button
                       onClick={() => {
-                        const url = `${window.location.origin}/proposal/share/${createdProposal.share_token}`
+                        const url = `${window.location.origin}/proposals/share/${createdProposal.share_token}`
                         navigator.clipboard.writeText(url).then(() => alert('Share link copied!')).catch(() => {
                           prompt('Copy this link:', url)
                         })
@@ -419,7 +419,7 @@ function ProposalBuilderInner() {
                           .replace(/\D/g, '')                   // strip non-digits
                           .replace(/^91/, '')                    // remove 91 country code if present
                         const appUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin
-                        const shareUrl = `${appUrl}/proposal/share/${createdProposal.share_token}`
+                        const shareUrl = `${appUrl}/proposals/share/${createdProposal.share_token}`
 
                         // Professional sales message — formatted for readability on mobile
                         const clientName = createdProposal.client_name || createdProposal.leads?.name || ''
@@ -584,7 +584,7 @@ function ProposalBuilderInner() {
                                   if (!clientPhone) return
                                   const appUrl = window.location.origin
                                   const shareUrl = p.share_token
-                                    ? `${appUrl}/proposal/share/${p.share_token}`
+                                    ? `${appUrl}/proposals/share/${p.share_token}`
                                     : `${appUrl}/api/proposals/${p.id}/preview`
                                   const eventDate = p.event_date
                                     ? new Date(p.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })

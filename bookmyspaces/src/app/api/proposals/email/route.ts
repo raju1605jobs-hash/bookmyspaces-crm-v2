@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     const { data: proposal, error } = await supabaseAdmin.from('proposals').select('*, leads(name, phone, email)').eq('id', proposal_id).single()
     if (error || !proposal) return NextResponse.json({ error: 'Proposal not found' }, { status: 404 })
 
-    const shareUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://bookmyspaces.in'}/proposal/share/${proposal.share_token}`
+    const shareUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'https://bookmyspaces.in'}/proposals/share/${proposal.share_token}`
     const toEmail = recipient_email || proposal.client_email || (proposal.leads as any)?.email || ''
     const clientName = proposal.client_name || (proposal.leads as any)?.name || 'Valued Client'
     const subject = `Your Event Proposal — ${proposal.proposal_number} | BookMySpaces`
