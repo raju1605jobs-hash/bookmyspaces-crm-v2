@@ -51,7 +51,7 @@ export async function POST(req: NextRequest) {
           category: item.category,
           content: chunks[i],
           chunk_index: i,
-          embedding: new Array(1536).fill(0), // zero vector placeholder
+          embedding: null,
           metadata: { total_chunks: chunks.length },
         })
         if (!error) inserted++
@@ -79,7 +79,7 @@ export async function POST(req: NextRequest) {
           category: category || 'general',
           content: chunks[i],
           chunk_index: i,
-          embedding: new Array(1536).fill(0),
+          embedding: null,
           metadata: { total_chunks: chunks.length },
         })
         if (!error) inserted++
@@ -113,3 +113,4 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'Failed' }, { status: 500 })
   }
 }
+
