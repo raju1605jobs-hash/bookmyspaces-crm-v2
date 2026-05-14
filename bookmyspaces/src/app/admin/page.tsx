@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import {
-  Brain, Upload, CheckCircle, AlertCircle, Loader2,
+  Upload, CheckCircle, AlertCircle, Loader2,
   Database, Activity, FileText, RefreshCw,
 } from 'lucide-react'
 
@@ -39,48 +39,28 @@ export default function AdminPage() {
     }
   }
 
-  // Seeds one source at a time to avoid Vercel 10s timeout
   const seedKnowledge = async () => {
     setIsSeeding(true)
     setSeedResult(null)
-    setSeedProgress(null)
-
-    let totalChunksSeeded = 0
-    let index = 0
+    setSeedProgress('Seeding all knowledge sources...')
 
     try {
-      while (true) {
-        setSeedProgress(`Seeding source ${index + 1}...`)
+      const res = await fetch('/api/knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'seed_all' }),
+      })
 
-        const res = await fetch('/api/knowledge', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'seed_one', index }),
-        })
+      const data = await res.json()
 
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: 'Unknown error' }))
-          setSeedResult(`✗ Failed at source ${index + 1}: ${err.error}`)
-          break
-        }
-
-        const data = await res.json()
-        totalChunksSeeded += data.result?.chunks || 0
-        setSeedProgress(`Seeded ${data.result?.source} (${data.result?.chunks} chunks)`)
-
-        if (data.next === null) {
-          // All done
-          setSeedResult(`✓ Seeded ${totalChunksSeeded} chunks from ${data.total} sources`)
-          await fetchKnowledge()
-          break
-        }
-
-        index = data.next
-        // Small pause between requests
-        await new Promise(r => setTimeout(r, 300))
+      if (data.success) {
+        setSeedResult(`✓ ${data.message}`)
+        await fetchKnowledge()
+      } else {
+        setSeedResult(`✗ Failed: ${data.error}`)
       }
-    } catch (err) {
-      setSeedResult(`✗ Network error — try again`)
+    } catch {
+      setSeedResult('✗ Network error — try again')
     } finally {
       setIsSeeding(false)
       setSeedProgress(null)
