@@ -7,11 +7,17 @@ export async function GET(req: NextRequest) {
   const token = searchParams.get("hub.verify_token");
   const challenge = searchParams.get("hub.challenge");
 
-  return NextResponse.json({
-    mode,
-    token,
-    challenge,
-    envToken: process.env.META_VERIFY_TOKEN,
+  if (
+    mode === "subscribe" &&
+    token === process.env.META_VERIFY_TOKEN
+  ) {
+    return new Response(challenge, {
+      status: 200,
+    });
+  }
+
+  return new Response("Forbidden", {
+    status: 403,
   });
 }
 
