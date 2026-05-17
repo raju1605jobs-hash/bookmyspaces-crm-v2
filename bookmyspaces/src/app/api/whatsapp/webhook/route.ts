@@ -22,17 +22,22 @@
 //
 // ── AI engine ────────────────────────────────────────────────────────────────
 // Primary:  Anthropic Claude (ANTHROPIC_API_KEY)
-// Model:    process.env.ANTHROPIC_MODEL || "claude-3-haiku-20240307"
-// Fallback: null returned on any failure — webhook always returns 200
+// Models:   tried in order — first success wins, each failure logged individually
+// Fallback: null returned when all models fail — webhook always returns 200
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
-// Configurable via Vercel env var. Fallback is the most universally available model.
-const ANTHROPIC_MODEL =
-  process.env.ANTHROPIC_MODEL || "claude-3-haiku-20240307";
+// Tried left-to-right. First success wins.
+// Set ANTHROPIC_MODEL in Vercel env vars to inject a preferred model at position 0.
+const ANTHROPIC_MODELS = [
+  process.env.ANTHROPIC_MODEL,      // Vercel env override (may be undefined)
+  "claude-3-5-sonnet-latest",       // latest sonnet alias
+  "claude-3-5-haiku-latest",        // latest haiku alias
+  "claude-3-haiku-20240307",        // oldest dated haiku — widest availability
+].filter(Boolean) as string[];
 
 // ─── GET: Meta webhook verification ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -515,42 +520,57 @@ ${knowledgeContext ? `Relevant knowledge from our database:\n${knowledgeContext}
 
 Keep your reply short, friendly, and practical. This is WhatsApp — not email.`;
 
-    // ── Call Anthropic ────────────────────────────────────────────────────────
+    // ── Call Anthropic — try each model in order, first success wins ─────────
     const anthropic = new Anthropic({ apiKey });
 
-    console.log("[WhatsApp Webhook] 🤖 Calling Anthropic model:", ANTHROPIC_MODEL);
+    for (const model of ANTHROPIC_MODELS) {
+      try {
+        console.log("[WhatsApp Webhook] 🤖 Trying Anthropic model:", model);
 
-    const response = await anthropic.messages.create({
-      model      : ANTHROPIC_MODEL,
-      max_tokens : 300,
-      system     : systemPrompt,
-      messages   : claudeMessages,
-    });
+        const response = await anthropic.messages.create({
+          model,
+          max_tokens : 300,
+          system     : systemPrompt,
+          messages   : claudeMessages,
+        });
 
-    const aiText = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map(b => b.text)
-      .join("")
-      .trim();
+        const aiText = response.content
+          .filter((b): b is Anthropic.TextBlock => b.type === "text")
+          .map(b => b.text)
+          .join("")
+          .trim();
 
-    if (!aiText) {
-      console.warn("[WhatsApp Webhook] ⚠️  Anthropic returned empty content");
-      return null;
+        if (!aiText) {
+          console.warn("[WhatsApp Webhook] ⚠️  Anthropic model returned empty content:", model);
+          continue;  // try next model
+        }
+
+        console.log("[WhatsApp Webhook] ✅ Anthropic model succeeded:", model);
+        return aiText;
+
+      } catch (modelErr: unknown) {
+        const e = modelErr as Record<string, unknown>;
+        console.error("[WhatsApp Webhook] ❌ Anthropic model failed:", {
+          model,
+          status   : e?.status     ?? e?.statusCode ?? "unknown",
+          message  : e?.message    ?? String(modelErr),
+          response : e?.response   ?? e?.body       ?? null,
+        });
+        // continue to next model
+      }
     }
 
-    return aiText;
+    // All models exhausted
+    console.error("[WhatsApp Webhook] ❌ All Anthropic models failed — returning null");
+    return null;  // never throw — webhook always returns 200
 
   } catch (err: unknown) {
+    // Outer catch: unexpected error outside the model loop (RAG, key check, etc.)
     const anyErr = err as Record<string, unknown>;
-    console.error("[WhatsApp Webhook] ❌ Anthropic AI error:", {
-      model      : ANTHROPIC_MODEL,
-      status     : anyErr?.status     ?? "unknown",
-      statusCode : anyErr?.statusCode ?? "unknown",
-      message    : anyErr?.message    ?? String(err),
-      error      : anyErr?.error      ?? null,
-      response   : anyErr?.response   ?? null,
-      body       : anyErr?.body       ?? null,
+    console.error("[WhatsApp Webhook] ❌ generateAIReply unexpected error:", {
+      message  : anyErr?.message ?? String(err),
+      response : anyErr?.response ?? anyErr?.body ?? null,
     });
-    return null;  // never throw — webhook always returns 200
+    return null;
   }
 }
