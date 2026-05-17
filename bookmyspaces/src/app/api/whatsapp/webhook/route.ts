@@ -31,13 +31,15 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
 // Tried left-to-right. First success wins.
-// Set ANTHROPIC_MODEL in Vercel env vars to inject a preferred model at position 0.
-const ANTHROPIC_MODELS = [
-  process.env.ANTHROPIC_MODEL,      // Vercel env override (may be undefined)
-  "claude-3-5-sonnet-latest",       // latest sonnet alias
-  "claude-3-5-haiku-latest",        // latest haiku alias
-  "claude-3-haiku-20240307",        // oldest dated haiku — widest availability
-].filter(Boolean) as string[];
+// All IDs are explicit dated strings — no aliases, no env var dependency.
+const ANTHROPIC_MODELS: string[] = [
+  "claude-sonnet-4-5-20250929",   // newest
+  "claude-sonnet-4-20250514",
+  "claude-3-7-sonnet-20250219",
+  "claude-3-5-sonnet-20241022",
+  "claude-3-5-haiku-20241022",
+  "claude-3-haiku-20240307",      // oldest — widest availability
+];
 
 // ─── GET: Meta webhook verification ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -550,18 +552,23 @@ Keep your reply short, friendly, and practical. This is WhatsApp — not email.`
 
       } catch (modelErr: unknown) {
         const e = modelErr as Record<string, unknown>;
+        // Log every field the Anthropic SDK can surface so the failure is
+        // fully diagnosable in Vercel logs without any extra tooling.
         console.error("[WhatsApp Webhook] ❌ Anthropic model failed:", {
           model,
-          status   : e?.status     ?? e?.statusCode ?? "unknown",
-          message  : e?.message    ?? String(modelErr),
-          response : e?.response   ?? e?.body       ?? null,
+          status     : e?.status               ?? "unknown",
+          statusCode : e?.statusCode            ?? "unknown",
+          message    : e?.message               ?? String(modelErr),
+          errorType  : (e?.error as Record<string, unknown>)?.type ?? e?.type ?? null,
+          response   : e?.response              ?? null,
+          body       : e?.body                  ?? null,
         });
         // continue to next model
       }
     }
 
     // All models exhausted
-    console.error("[WhatsApp Webhook] ❌ All Anthropic models failed — returning null");
+    console.error("[WhatsApp Webhook] ❌ All Anthropic models failed — likely API key/account/model access issue");
     return null;  // never throw — webhook always returns 200
 
   } catch (err: unknown) {
