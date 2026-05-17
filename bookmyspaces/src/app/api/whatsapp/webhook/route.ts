@@ -5,33 +5,34 @@
 // Phase B     Send WhatsApp reply via Meta API (next phase)
 //
 // ── Live Supabase schema (verified via information_schema) ───────────────────
-// leads:         session_id, phone, name, source, status, notes,
-//                last_contacted_at, whatsapp_opted_in
-//                ✗ inquiry_summary — does not exist
-//                ✗ whatsapp_last_message_at — does not exist
+// leads safe columns:
+//   id, name, phone, source, status, notes,
+//   last_contacted_at, whatsapp_opted_in, session_id, created_at, updated_at
+//   ✗ inquiry_summary        — does not exist
+//   ✗ whatsapp_last_message_at — does not exist
 //
-// conversations: id, session_id, source, phone, name, status, channel,
-//                lead_id, messages (jsonb), is_active, updated_at
+// conversations safe columns:
+//   id, session_id, source, phone, name, channel, status,
+//   lead_id, messages (jsonb), is_active, created_at, updated_at
 //
-// activity_logs: lead_id, action, description, performed_by, channel,
-//                metadata (jsonb), details (jsonb)
+// activity_logs safe columns:
+//   id, lead_id, action, description, channel,
+//   metadata (jsonb), details (jsonb), created_at
+//   ✗ performed_by — NOT in live schema, do not use
 //
 // ── AI engine ────────────────────────────────────────────────────────────────
-// Primary:  Anthropic Claude  (ANTHROPIC_API_KEY)
-// Model:    process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022" (configurable)
-// Fallback: returns null on any failure — webhook still returns 200
-// RAG:      knowledge_chunks queried via Supabase full-text search
+// Primary:  Anthropic Claude (ANTHROPIC_API_KEY)
+// Model:    process.env.ANTHROPIC_MODEL || "claude-3-haiku-20240307"
+// Fallback: null returned on any failure — webhook always returns 200
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
-// Model is configurable via Vercel env var ANTHROPIC_MODEL.
-// Fallback: claude-3-5-haiku-20241022 (widely available, fast, cost-efficient).
-// To override: set ANTHROPIC_MODEL=claude-3-opus-20240229 in Vercel env vars.
+// Configurable via Vercel env var. Fallback is the most universally available model.
 const ANTHROPIC_MODEL =
-  process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022";
+  process.env.ANTHROPIC_MODEL || "claude-3-haiku-20240307";
 
 // ─── GET: Meta webhook verification ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -54,58 +55,67 @@ export async function GET(req: NextRequest) {
 // ─── POST: Incoming WhatsApp events ──────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
+    // ── STEP A: Parse payload ─────────────────────────────────────────────────
     const body = await req.json();
-
-    console.log(
-      "[WhatsApp Webhook] 📨 Full payload:",
-      JSON.stringify(body, null, 2)
-    );
+    console.log("[WhatsApp Webhook] STEP A — payload parsed");
+    console.log("[WhatsApp Webhook] 📨 Full payload:", JSON.stringify(body, null, 2));
 
     const entry  = body?.entry?.[0];
     const change = entry?.changes?.[0];
     const value  = change?.value;
 
-    // ── Status callbacks — not inbound messages ───────────────────────────────
+    // Early exit: status callback (delivery receipt, read receipt) — not a message
     if (value?.statuses?.length) {
       const s = value.statuses[0];
-      console.log("[WhatsApp Webhook] 🔔 Status update (no action needed):", {
+      console.log("[WhatsApp Webhook] 🔔 Status update — returning 200:", {
         messageId : s?.id,
         status    : s?.status,
         recipient : s?.recipient_id,
-        timestamp : s?.timestamp,
       });
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
-    // ── Guard: no inbound message ─────────────────────────────────────────────
+    // Early exit: no message object at all
     const message = value?.messages?.[0];
     if (!message) {
       console.log("[WhatsApp Webhook] ℹ️  No message in payload — returning 200");
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
-    // ── Extract message fields ────────────────────────────────────────────────
-    const senderPhone : string = message.from                         ?? "unknown";
-    const messageId   : string = message.id                           ?? "unknown";
+    // ── STEP B: Extract fields ────────────────────────────────────────────────
+    const senderPhone : string = message.from                         ?? "";
+    const messageId   : string = message.id                           ?? "";
     const rawTs       : string = message.timestamp                    ?? "";
     const messageText : string = message.text?.body                   ?? "";
     const senderName  : string = value?.contacts?.[0]?.profile?.name ?? "";
     const messageType : string = message.type                         ?? "unknown";
 
+    // Early exit: missing sender phone (cannot link to lead or conversation)
+    if (!senderPhone) {
+      console.log("[WhatsApp Webhook] ❌ STEP B — sender phone missing, cannot process");
+      return NextResponse.json({ status: "ok" }, { status: 200 });
+    }
+
+    // Early exit: non-text message type (image, audio, sticker, etc.)
+    if (messageType !== "text" || !messageText.trim()) {
+      console.log("[WhatsApp Webhook] ⏭️  STEP B — non-text message type:", messageType, "— returning 200");
+      return NextResponse.json({ status: "ok" }, { status: 200 });
+    }
+
     const messageTimestamp = rawTs
       ? new Date(parseInt(rawTs, 10) * 1000).toISOString()
       : new Date().toISOString();
 
-    console.log("[WhatsApp Webhook] 💬 Inbound message:", {
+    console.log("[WhatsApp Webhook] STEP B — inbound text extracted:", {
       senderPhone,
-      senderName       : senderName  || "(no profile name)",
-      messageText      : messageText || `[non-text: ${messageType}]`,
+      senderName       : senderName || "(no profile name)",
+      messageText,
       messageId,
       messageTimestamp,
     });
 
-    // Persist + generate AI reply — isolated so DB/AI failures never block 200
-    await handleInboundMessage({
+    // Hand off to the full persistence + AI pipeline
+    await runPipeline({
       senderPhone,
       senderName,
       messageText,
@@ -118,26 +128,13 @@ export async function POST(req: NextRequest) {
     console.error("[WhatsApp Webhook] 🔥 Unexpected error in POST handler:", err);
   }
 
+  // Always 200 — no exceptions
+  console.log("[WhatsApp Webhook] STEP Z — webhook completed, returning 200");
   return NextResponse.json({ status: "ok" }, { status: 200 });
 }
 
-// ─── Supabase error logger ────────────────────────────────────────────────────
-function logSupabaseError(label: string, err: {
-  message?: string;
-  code?   : string;
-  details?: string;
-  hint?   : string;
-} | null) {
-  if (!err) return;
-  console.error(`[WhatsApp Webhook] ❌ ${label}:`, {
-    message : err.message,
-    code    : err.code,
-    details : err.details,
-    hint    : err.hint,
-  });
-}
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 interface InboundMessage {
   senderPhone      : string;
   senderName       : string;
@@ -154,22 +151,31 @@ interface ConvMessage {
   meta?     : Record<string, unknown>;
 }
 
-// ─── Main handler — persist then generate AI reply ────────────────────────────
-async function handleInboundMessage(msg: InboundMessage): Promise<void> {
-  const {
-    senderPhone,
-    senderName,
-    messageText,
-    messageId,
-    messageTimestamp,
-    messageType,
-  } = msg;
+function logDbErr(label: string, err: {
+  message?: string;
+  code?   : string;
+  details?: string;
+  hint?   : string;
+} | null) {
+  if (!err) return;
+  console.error(`[WhatsApp Webhook] ❌ ${label}:`, {
+    message : err.message,
+    code    : err.code,
+    details : err.details,
+    hint    : err.hint,
+  });
+}
+
+// ─── Full pipeline: C → D → E → F → G → H ───────────────────────────────────
+async function runPipeline(msg: InboundMessage): Promise<void> {
+  const { senderPhone, senderName, messageText, messageId, messageTimestamp, messageType } = msg;
 
   try {
     const db        = getSupabaseAdmin();
     const sessionId = `whatsapp_${senderPhone}`;
 
-    // ── STEP 1: Lead — find or create ─────────────────────────────────────────
+    // ── STEP C: Lead upsert ───────────────────────────────────────────────────
+    console.log("[WhatsApp Webhook] STEP C — lead upsert started for phone:", senderPhone);
     let leadId: string | null = null;
 
     const { data: existingLead, error: leadLookupErr } = await db
@@ -178,23 +184,22 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       .eq("phone", senderPhone)
       .maybeSingle();
 
-    if (leadLookupErr) logSupabaseError("Lead lookup", leadLookupErr);
+    if (leadLookupErr) {
+      logDbErr("STEP C lead lookup", leadLookupErr);
+    }
 
     if (existingLead) {
       leadId = existingLead.id;
-      console.log("[WhatsApp Webhook] ✅ Existing lead found:", {
+      console.log("[WhatsApp Webhook] STEP C — existing lead found:", {
         leadId,
         name   : existingLead.name   ?? "(no name)",
-        phone  : existingLead.phone,
         status : existingLead.status,
       });
 
       const updatePayload: Record<string, unknown> = {
         last_contacted_at : messageTimestamp,
         whatsapp_opted_in : true,
-        notes: messageText
-          ? `${existingLead.notes ? existingLead.notes + "\n\n" : ""}[WhatsApp ${messageTimestamp}]: ${messageText}`
-          : existingLead.notes,
+        notes             : `${existingLead.notes ? existingLead.notes + "\n\n" : ""}[WhatsApp ${messageTimestamp}]: ${messageText}`,
       };
       if (senderName && !existingLead.name) updatePayload.name = senderName;
 
@@ -203,9 +208,11 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
         .update(updatePayload)
         .eq("id", leadId);
 
-      if (leadUpdateErr) logSupabaseError("Lead update", leadUpdateErr);
+      if (leadUpdateErr) logDbErr("STEP C lead update", leadUpdateErr);
+      else console.log("[WhatsApp Webhook] STEP C — lead updated:", leadId);
 
     } else {
+      // No existing lead — create one
       const { data: newLead, error: leadCreateErr } = await db
         .from("leads")
         .insert({
@@ -214,9 +221,7 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
           name              : senderName || null,
           source            : "whatsapp",
           status            : "new",
-          notes             : messageText
-            ? `First WhatsApp message: "${messageText}"`
-            : "WhatsApp contact — no text in first message",
+          notes             : `First WhatsApp message: "${messageText}"`,
           last_contacted_at : messageTimestamp,
           whatsapp_opted_in : true,
         })
@@ -224,29 +229,45 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
         .single();
 
       if (leadCreateErr) {
-        logSupabaseError("Lead create", leadCreateErr);
+        logDbErr("STEP C lead create", leadCreateErr);
+        // leadId stays null — pipeline continues without it
       } else {
         leadId = newLead?.id ?? null;
-        console.log("[WhatsApp Webhook] 🆕 New lead created:", {
-          leadId,
-          phone : senderPhone,
-          name  : senderName || "(no name)",
-        });
+        console.log("[WhatsApp Webhook] STEP C — new lead created:", { leadId, senderPhone });
       }
     }
 
-    // ── STEP 2: Conversation — find or create, append user message ────────────
+    console.log("[WhatsApp Webhook] STEP C — lead upsert completed. leadId:", leadId);
+
+    // ── STEP D: Conversation lookup ───────────────────────────────────────────
+    console.log("[WhatsApp Webhook] STEP D — conversation lookup started. sessionId:", sessionId);
+
     const { data: existingConv, error: convLookupErr } = await db
       .from("conversations")
       .select("id, messages")
       .eq("session_id", sessionId)
       .maybeSingle();
 
-    if (convLookupErr) logSupabaseError("Conversation lookup", convLookupErr);
+    if (convLookupErr) logDbErr("STEP D conversation lookup", convLookupErr);
+
+    // KEY FIX: convId is set immediately from existingConv — not inside a success branch.
+    // This ensures STEP G (AI) is not skipped even if the PATCH below has issues.
+    let convId: string | null = existingConv?.id ?? null;
+    const priorMessages: ConvMessage[] = Array.isArray(existingConv?.messages)
+      ? (existingConv!.messages as ConvMessage[])
+      : [];
+
+    console.log("[WhatsApp Webhook] STEP D — conversation lookup completed:", {
+      convId,
+      existingMessageCount: priorMessages.length,
+    });
+
+    // ── STEP E: Append user message to conversation ───────────────────────────
+    console.log("[WhatsApp Webhook] STEP E — user message append started");
 
     const userEntry: ConvMessage = {
       role      : "user",
-      content   : messageText || `[${messageType} message]`,
+      content   : messageText,
       timestamp : messageTimestamp,
       meta      : {
         whatsapp_message_id : messageId,
@@ -254,37 +275,31 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       },
     };
 
-    let convId          : string | null   = null;
-    let priorMessages   : ConvMessage[]   = [];
-
-    if (existingConv) {
-      priorMessages = Array.isArray(existingConv.messages)
-        ? (existingConv.messages as ConvMessage[])
-        : [];
-
+    if (existingConv && convId) {
+      // Append to existing conversation
       const { error: convUpdateErr } = await db
         .from("conversations")
         .update({
           source     : "whatsapp",
           phone      : senderPhone,
-          ...(senderName ? { name: senderName } : {}),
           channel    : "whatsapp",
-          ...(leadId ? { lead_id: leadId } : {}),
-          messages   : [...priorMessages, userEntry],
           is_active  : true,
           status     : "active",
+          messages   : [...priorMessages, userEntry],
           updated_at : new Date().toISOString(),
+          ...(leadId ? { lead_id: leadId } : {}),
+          ...(senderName ? { name: senderName } : {}),
         })
-        .eq("id", existingConv.id);
+        .eq("id", convId);
 
       if (convUpdateErr) {
-        logSupabaseError("Conversation update (user msg)", convUpdateErr);
+        logDbErr("STEP E conversation update", convUpdateErr);
       } else {
-        convId = existingConv.id;
-        console.log("[WhatsApp Webhook] 💾 User message appended to conversation:", convId);
+        console.log("[WhatsApp Webhook] STEP E — user message appended to conversation:", convId);
       }
 
     } else {
+      // Create new conversation
       const { data: newConv, error: convCreateErr } = await db
         .from("conversations")
         .insert({
@@ -292,25 +307,31 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
           source     : "whatsapp",
           phone      : senderPhone,
           name       : senderName || null,
-          status     : "active",
           channel    : "whatsapp",
-          lead_id    : leadId,
-          messages   : [userEntry],
+          status     : "active",
           is_active  : true,
+          messages   : [userEntry],
+          ...(leadId ? { lead_id: leadId } : {}),
         })
         .select("id")
         .single();
 
       if (convCreateErr) {
-        logSupabaseError("Conversation create", convCreateErr);
+        logDbErr("STEP E conversation create", convCreateErr);
       } else {
         convId = newConv?.id ?? null;
-        console.log("[WhatsApp Webhook] 💾 New conversation created:", convId);
+        console.log("[WhatsApp Webhook] STEP E — new conversation created:", convId);
       }
     }
 
-    // ── STEP 3: Activity log ──────────────────────────────────────────────────
+    console.log("[WhatsApp Webhook] STEP E — user message append completed. convId:", convId);
+
+    // ── STEP F: Activity log ──────────────────────────────────────────────────
+    // Only written when we have a lead to attach it to.
+    // Does NOT use performed_by — that column does not exist in the live DB.
     if (leadId) {
+      console.log("[WhatsApp Webhook] STEP F — activity log started");
+
       const shortText = messageText.length > 120
         ? `${messageText.slice(0, 120)}…`
         : messageText;
@@ -318,41 +339,33 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       const { error: logErr } = await db
         .from("activity_logs")
         .insert({
-          lead_id      : leadId,
-          action       : "whatsapp_message_received",
-          description  : messageText
-            ? `WhatsApp message from ${senderPhone}: "${shortText}"`
-            : `WhatsApp ${messageType} message received from ${senderPhone}`,
-          performed_by : "system",
-          channel      : "whatsapp",
-          metadata     : {
+          lead_id     : leadId,
+          action      : "whatsapp_message_received",
+          description : `WhatsApp message from ${senderPhone}: "${shortText}"`,
+          channel     : "whatsapp",
+          metadata    : {
             whatsapp_message_id : messageId,
             sender_phone        : senderPhone,
             message_type        : messageType,
             timestamp           : messageTimestamp,
           },
-          details      : {
-            message_text : messageText || null,
-            sender_name  : senderName  || null,
+          details     : {
+            message_text : messageText,
+            sender_name  : senderName || null,
           },
         });
 
-      if (logErr) logSupabaseError("Activity log", logErr);
-      else console.log("[WhatsApp Webhook] 📋 Activity logged for lead:", leadId);
+      if (logErr) logDbErr("STEP F activity log", logErr);
+      else console.log("[WhatsApp Webhook] STEP F — activity log completed for lead:", leadId);
+    } else {
+      console.log("[WhatsApp Webhook] STEP F — skipped (no leadId)");
     }
 
-    // ── STEP 4: Generate AI reply ─────────────────────────────────────────────
-    if (!messageText.trim()) {
-      console.log("[WhatsApp Webhook] ⏭️  No text message — skipping AI reply generation");
-      return;
-    }
-
-    if (!convId) {
-      console.log("[WhatsApp Webhook] ⚠️  No conversation ID — skipping AI reply generation");
-      return;
-    }
-
-    console.log("[WhatsApp Webhook] 🤖 AI reply generation started for:", senderPhone);
+    // ── STEP G: Generate AI reply ─────────────────────────────────────────────
+    // Only requires messageText (already validated non-empty in POST handler).
+    // convId may be null if both conversation lookup and create failed —
+    // in that case we generate the reply but skip saving it.
+    console.log("[WhatsApp Webhook] STEP G — AI generation started for:", senderPhone);
 
     const aiReply = await generateAIReply({
       messageText,
@@ -363,18 +376,24 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
     });
 
     if (!aiReply) {
-      console.log("[WhatsApp Webhook] ⚠️  AI reply was empty or failed — not saving");
+      console.log("[WhatsApp Webhook] STEP G — AI generation returned null, skipping save");
       return;
     }
 
     console.log(
-      "[WhatsApp Webhook] 🤖 AI reply generated:",
+      "[WhatsApp Webhook] STEP G — AI reply generated:",
       aiReply.slice(0, 120) + (aiReply.length > 120 ? "…" : "")
     );
 
-    // ── STEP 5: Append AI reply to conversation ───────────────────────────────
-    // Re-fetch latest messages so we don't overwrite anything written between
-    // Step 2 and now (defensive against concurrent requests)
+    // ── STEP H: Save assistant reply to conversation ──────────────────────────
+    if (!convId) {
+      console.log("[WhatsApp Webhook] STEP H — skipped (convId is null, cannot save assistant reply)");
+      return;
+    }
+
+    console.log("[WhatsApp Webhook] STEP H — saving assistant reply to conversation:", convId);
+
+    // Re-fetch latest messages to get the freshest state (user msg was saved in STEP E)
     const { data: latestConv, error: latestConvErr } = await db
       .from("conversations")
       .select("messages")
@@ -382,7 +401,7 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       .single();
 
     if (latestConvErr) {
-      logSupabaseError("Conversation fetch before AI append", latestConvErr);
+      logDbErr("STEP H conversation fetch", latestConvErr);
       return;
     }
 
@@ -396,11 +415,11 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       timestamp : new Date().toISOString(),
       meta      : {
         generated_for    : "whatsapp",
-        sent_to_whatsapp : false,   // Phase B will flip this to true when sending
+        sent_to_whatsapp : false,   // Phase B flips this to true
       },
     };
 
-    const { error: aiAppendErr } = await db
+    const { error: aiSaveErr } = await db
       .from("conversations")
       .update({
         messages   : [...latestMessages, assistantEntry],
@@ -408,14 +427,14 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       })
       .eq("id", convId);
 
-    if (aiAppendErr) {
-      logSupabaseError("AI reply append to conversation", aiAppendErr);
+    if (aiSaveErr) {
+      logDbErr("STEP H assistant reply save", aiSaveErr);
     } else {
-      console.log("[WhatsApp Webhook] ✅ AI reply saved to conversation:", convId);
+      console.log("[WhatsApp Webhook] STEP H — assistant reply saved to conversation:", convId);
     }
 
   } catch (err) {
-    console.error("[WhatsApp Webhook] 🔥 handleInboundMessage unexpected error:", err);
+    console.error("[WhatsApp Webhook] 🔥 runPipeline unexpected error:", err);
   }
 }
 
@@ -432,9 +451,15 @@ async function generateAIReply(params: GenerateReplyParams): Promise<string | nu
   const { messageText, senderName, conversationHistory, db } = params;
 
   try {
-    // ── RAG: fetch relevant knowledge chunks via full-text search ─────────────
-    let knowledgeContext = "";
+    // ── Validate API key first ────────────────────────────────────────────────
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.error("[WhatsApp Webhook] ❌ ANTHROPIC_API_KEY missing");
+      return null;
+    }
 
+    // ── RAG: knowledge_chunks full-text search ────────────────────────────────
+    let knowledgeContext = "";
     try {
       const searchTerms = messageText.split(" ").slice(0, 6).join(" | ");
       const { data: chunks } = await db
@@ -448,14 +473,16 @@ async function generateAIReply(params: GenerateReplyParams): Promise<string | nu
           .map((c: { content: string; category: string }) => `[${c.category}]: ${c.content}`)
           .join("\n\n");
         console.log("[WhatsApp Webhook] 📚 RAG context loaded:", chunks.length, "chunks");
+      } else {
+        console.log("[WhatsApp Webhook] 📚 RAG — no matching chunks found");
       }
     } catch (ragErr) {
-      console.warn("[WhatsApp Webhook] ⚠️  RAG fetch failed (continuing without context):", ragErr);
+      console.warn("[WhatsApp Webhook] ⚠️  RAG fetch failed (continuing without):", ragErr);
     }
 
     // ── Build conversation history (last 6 turns) ─────────────────────────────
-    const recentHistory = conversationHistory.slice(-6);
-    const claudeMessages: Anthropic.MessageParam[] = recentHistory
+    const claudeMessages: Anthropic.MessageParam[] = conversationHistory
+      .slice(-6)
       .filter(m => m.role === "user" || m.role === "assistant")
       .map(m => ({
         role    : m.role as "user" | "assistant",
@@ -479,23 +506,16 @@ Your role:
 - Answer questions about venues, packages, pricing, availability, events
 - Collect key details: event type, date, guest count, budget
 - Be concise — WhatsApp messages should be short and conversational (2–4 lines max)
-- If you don't know something specific, offer to connect them with the team
+- If you do not know something specific, offer to connect them with the team
 - Always be professional, warm, and helpful
-- Reply in the same language the customer uses (Hindi/Bengali/English)
+- Reply in the same language the customer uses (Hindi / Bengali / English)
 - Do NOT make up specific prices or availability — offer to check
 
 ${knowledgeContext ? `Relevant knowledge from our database:\n${knowledgeContext}` : ""}
 
 Keep your reply short, friendly, and practical. This is WhatsApp — not email.`;
 
-    // ── Validate API key ──────────────────────────────────────────────────────
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      console.error("[WhatsApp Webhook] ❌ Anthropic AI error: ANTHROPIC_API_KEY is not set");
-      return null;
-    }
-
-    // ── Call Anthropic Claude ─────────────────────────────────────────────────
+    // ── Call Anthropic ────────────────────────────────────────────────────────
     const anthropic = new Anthropic({ apiKey });
 
     console.log("[WhatsApp Webhook] 🤖 Calling Anthropic model:", ANTHROPIC_MODEL);
@@ -521,9 +541,6 @@ Keep your reply short, friendly, and practical. This is WhatsApp — not email.`
     return aiText;
 
   } catch (err: unknown) {
-    // ── Detailed Anthropic error logging ──────────────────────────────────────
-    // Every field the Anthropic SDK can return is logged individually so the
-    // root cause is immediately visible in Vercel logs — no guessing needed.
     const anyErr = err as Record<string, unknown>;
     console.error("[WhatsApp Webhook] ❌ Anthropic AI error:", {
       model      : ANTHROPIC_MODEL,
@@ -534,6 +551,6 @@ Keep your reply short, friendly, and practical. This is WhatsApp — not email.`
       response   : anyErr?.response   ?? null,
       body       : anyErr?.body       ?? null,
     });
-    return null;   // Never throw — webhook must always complete with 200
+    return null;  // never throw — webhook always returns 200
   }
 }
