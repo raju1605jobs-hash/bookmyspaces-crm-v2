@@ -18,13 +18,17 @@
 //
 // ── AI engine ────────────────────────────────────────────────────────────────
 // Primary:  Anthropic Claude  (ANTHROPIC_API_KEY)
-// Fallback: returns a safe static reply on any failure
-// RAG:      knowledge_chunks queried via Supabase for context
+// Model:    claude-3-5-sonnet-20241022   ← fixed from broken claude-sonnet-4-20250514
+// Fallback: returns null on any failure — webhook still returns 200
+// RAG:      knowledge_chunks queried via Supabase full-text search
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabaseAdmin } from "@/lib/supabase";
+
+// The only model string in this file — change here to update everywhere
+const ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022";
 
 // ─── GET: Meta webhook verification ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -97,7 +101,7 @@ export async function POST(req: NextRequest) {
       messageTimestamp,
     });
 
-    // Persist + generate AI reply — fully isolated from Meta's 200 response
+    // Persist + generate AI reply — isolated so DB/AI failures never block 200
     await handleInboundMessage({
       senderPhone,
       senderName,
@@ -247,8 +251,8 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       },
     };
 
-    let convId     : string | null = null;
-    let priorMessages: ConvMessage[] = [];
+    let convId          : string | null   = null;
+    let priorMessages   : ConvMessage[]   = [];
 
     if (existingConv) {
       priorMessages = Array.isArray(existingConv.messages)
@@ -335,8 +339,6 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
     }
 
     // ── STEP 4: Generate AI reply ─────────────────────────────────────────────
-    // Only generate if we have actual text to reply to.
-    // Non-text messages (image, audio, sticker) get skipped gracefully.
     if (!messageText.trim()) {
       console.log("[WhatsApp Webhook] ⏭️  No text message — skipping AI reply generation");
       return;
@@ -358,14 +360,18 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
     });
 
     if (!aiReply) {
-      console.log("[WhatsApp Webhook] ⚠️  AI reply was empty — not saving");
+      console.log("[WhatsApp Webhook] ⚠️  AI reply was empty or failed — not saving");
       return;
     }
 
-    console.log("[WhatsApp Webhook] 🤖 AI reply generated:", aiReply.slice(0, 120) + (aiReply.length > 120 ? "…" : ""));
+    console.log(
+      "[WhatsApp Webhook] 🤖 AI reply generated:",
+      aiReply.slice(0, 120) + (aiReply.length > 120 ? "…" : "")
+    );
 
     // ── STEP 5: Append AI reply to conversation ───────────────────────────────
-    // Fetch the latest messages (user entry is already saved, so re-fetch)
+    // Re-fetch latest messages so we don't overwrite anything written between
+    // Step 2 and now (defensive against concurrent requests)
     const { data: latestConv, error: latestConvErr } = await db
       .from("conversations")
       .select("messages")
@@ -387,7 +393,7 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
       timestamp : new Date().toISOString(),
       meta      : {
         generated_for    : "whatsapp",
-        sent_to_whatsapp : false,        // Phase B will flip this to true
+        sent_to_whatsapp : false,   // Phase B will flip this to true when sending
       },
     };
 
@@ -411,9 +417,6 @@ async function handleInboundMessage(msg: InboundMessage): Promise<void> {
 }
 
 // ─── AI Reply Generator ───────────────────────────────────────────────────────
-// Uses Claude (primary) with RAG context from knowledge_chunks.
-// Falls back to a safe static reply if Claude fails for any reason.
-
 interface GenerateReplyParams {
   messageText         : string;
   senderName          : string;
@@ -426,20 +429,15 @@ async function generateAIReply(params: GenerateReplyParams): Promise<string | nu
   const { messageText, senderName, conversationHistory, db } = params;
 
   try {
-    // ── Fetch RAG context from knowledge_chunks ───────────────────────────────
-    // We do a simple text search instead of vector search here to avoid
-    // the OpenAI embedding round-trip inside the webhook hot path.
-    // The chat route uses full vector RAG; here we use keyword fallback.
+    // ── RAG: fetch relevant knowledge chunks via full-text search ─────────────
     let knowledgeContext = "";
 
     try {
+      const searchTerms = messageText.split(" ").slice(0, 6).join(" | ");
       const { data: chunks } = await db
         .from("knowledge_chunks")
         .select("content, category")
-        .textSearch("content", messageText.split(" ").slice(0, 6).join(" | "), {
-          type   : "websearch",
-          config : "english",
-        })
+        .textSearch("content", searchTerms, { type: "websearch", config: "english" })
         .limit(4);
 
       if (chunks && chunks.length > 0) {
@@ -449,12 +447,10 @@ async function generateAIReply(params: GenerateReplyParams): Promise<string | nu
         console.log("[WhatsApp Webhook] 📚 RAG context loaded:", chunks.length, "chunks");
       }
     } catch (ragErr) {
-      // RAG failure is non-fatal — continue without context
-      console.warn("[WhatsApp Webhook] ⚠️  RAG fetch failed (continuing without):", ragErr);
+      console.warn("[WhatsApp Webhook] ⚠️  RAG fetch failed (continuing without context):", ragErr);
     }
 
-    // ── Build conversation history for Claude ─────────────────────────────────
-    // Only include the last 6 turns to keep the context window lean
+    // ── Build conversation history (last 6 turns) ─────────────────────────────
     const recentHistory = conversationHistory.slice(-6);
     const claudeMessages: Anthropic.MessageParam[] = recentHistory
       .filter(m => m.role === "user" || m.role === "assistant")
@@ -463,7 +459,6 @@ async function generateAIReply(params: GenerateReplyParams): Promise<string | nu
         content : m.content,
       }));
 
-    // Add the current user message
     claudeMessages.push({ role: "user", content: messageText });
 
     // ── System prompt ─────────────────────────────────────────────────────────
@@ -490,18 +485,21 @@ ${knowledgeContext ? `Relevant knowledge from our database:\n${knowledgeContext}
 
 Keep your reply short, friendly, and practical. This is WhatsApp — not email.`;
 
-    // ── Call Claude ───────────────────────────────────────────────────────────
+    // ── Validate API key ──────────────────────────────────────────────────────
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      console.error("[WhatsApp Webhook] ❌ AI generation failed: ANTHROPIC_API_KEY not set");
+      console.error("[WhatsApp Webhook] ❌ Anthropic AI error: ANTHROPIC_API_KEY is not set");
       return null;
     }
 
+    // ── Call Anthropic Claude ─────────────────────────────────────────────────
     const anthropic = new Anthropic({ apiKey });
 
+    console.log("[WhatsApp Webhook] 🤖 Calling Anthropic model:", ANTHROPIC_MODEL);
+
     const response = await anthropic.messages.create({
-      model      : "claude-sonnet-4-20250514",
-      max_tokens : 300,          // Keep WhatsApp replies short
+      model      : ANTHROPIC_MODEL,
+      max_tokens : 300,
       system     : systemPrompt,
       messages   : claudeMessages,
     });
@@ -513,14 +511,24 @@ Keep your reply short, friendly, and practical. This is WhatsApp — not email.`
       .trim();
 
     if (!aiText) {
-      console.warn("[WhatsApp Webhook] ⚠️  Claude returned empty content");
+      console.warn("[WhatsApp Webhook] ⚠️  Anthropic returned empty content");
       return null;
     }
 
     return aiText;
 
   } catch (err: unknown) {
-    console.error("[WhatsApp Webhook] ❌ AI generation failed:", err);
-    return null;
+    // ── Detailed Anthropic error logging ──────────────────────────────────────
+    // Logs status, message, response body, and the model name so failures
+    // are immediately diagnosable in Vercel logs without guessing.
+    const anyErr = err as Record<string, unknown>;
+    console.error("[WhatsApp Webhook] ❌ Anthropic AI error:", {
+      model    : ANTHROPIC_MODEL,
+      status   : anyErr?.status   ?? anyErr?.statusCode ?? "unknown",
+      message  : anyErr?.message  ?? String(err),
+      response : anyErr?.response ?? anyErr?.body       ?? null,
+      type     : anyErr?.error    ?? null,
+    });
+    return null;   // Never throw — webhook must always complete with 200
   }
 }
