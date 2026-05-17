@@ -4,18 +4,20 @@
 // Phase 2 (later): AI reply
 // Phase 3 (later): Send WhatsApp reply
 //
-// Column sources (verified against all SQL migrations 001–007):
+// COLUMN INVENTORY — verified against live Supabase schema cache error and
+// all SQL migration files (001–007). Only confirmed-safe columns are used.
 //
-// leads:          id, name, phone, source, status, notes, inquiry_summary,
-//                 last_contacted_at, whatsapp_opted_in, whatsapp_last_message_at
+// leads (used here):
+//   name, phone, source, status, notes,
+//   last_contacted_at, whatsapp_opted_in, whatsapp_last_message_at
+//   *** inquiry_summary intentionally omitted — NOT in live DB schema cache ***
 //
-// conversations:  id, session_id, channel ('website'|'whatsapp'), lead_id,
-//                 messages (JSONB []), is_active, updated_at
-//                 (channel and lead_id ARE real columns — confirmed in 001)
+// conversations (used here):
+//   session_id, channel, lead_id, messages (JSONB), is_active, updated_at
 //
-// activity_logs:  id, lead_id, action, description, performed_by,
-//                 metadata (JSONB), channel
-//                 (channel added in 002; description is the text column, NOT details)
+// activity_logs (used here):
+//   lead_id, action, description, performed_by, metadata (JSONB), channel
+//   *** column is 'metadata' NOT 'details' — confirmed in 001_initial_schema ***
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
@@ -25,9 +27,9 @@ import { getSupabaseAdmin } from "@/lib/supabase";
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
-  const mode      = searchParams.get("hub.mode");
-  const token     = searchParams.get("hub.verify_token");
-  const challenge = searchParams.get("hub.challenge");
+  const mode        = searchParams.get("hub.mode");
+  const token       = searchParams.get("hub.verify_token");
+  const challenge   = searchParams.get("hub.challenge");
   const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
 
   if (mode === "subscribe" && token === verifyToken) {
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Log full payload — useful during development
+    // Log full raw payload for debugging in Vercel logs
     console.log(
       "[WhatsApp Webhook] 📨 Full payload:",
       JSON.stringify(body, null, 2)
@@ -67,14 +69,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
-    // ── Inbound message guard ─────────────────────────────────────────────────
+    // ── Guard: no inbound message ─────────────────────────────────────────────
     const message = value?.messages?.[0];
     if (!message) {
       console.log("[WhatsApp Webhook] ℹ️  No message in payload — returning 200");
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
-    // ── Extract message fields ────────────────────────────────────────────────
+    // ── Extract inbound message fields ────────────────────────────────────────
     const senderPhone : string = message.from                         ?? "unknown";
     const messageId   : string = message.id                           ?? "unknown";
     const rawTs       : string = message.timestamp                    ?? "";
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
     const senderName  : string = value?.contacts?.[0]?.profile?.name ?? "";
     const messageType : string = message.type                         ?? "unknown";
 
-    // WhatsApp timestamps are Unix seconds → convert to ISO string
+    // WhatsApp timestamps are Unix seconds — convert to ISO string
     const messageTimestamp = rawTs
       ? new Date(parseInt(rawTs, 10) * 1000).toISOString()
       : new Date().toISOString();
@@ -95,18 +97,11 @@ export async function POST(req: NextRequest) {
       messageTimestamp,
     });
 
-    // ── Persist to Supabase — never let this block Meta getting 200 ───────────
-    await saveToSupabase({
-      senderPhone,
-      senderName,
-      messageText,
-      messageId,
-      messageTimestamp,
-      messageType,
-    });
+    // Persist — isolated so DB failures never block the 200 response to Meta
+    await saveToSupabase({ senderPhone, senderName, messageText, messageId, messageTimestamp, messageType });
 
   } catch (err) {
-    // Top-level catch — still return 200 so Meta never retries indefinitely
+    // Top-level safety net — still 200 so Meta never retries indefinitely
     console.error("[WhatsApp Webhook] 🔥 Unexpected error in POST handler:", err);
   }
 
@@ -114,7 +109,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({ status: "ok" }, { status: 200 });
 }
 
-// ─── Persistence helper ───────────────────────────────────────────────────────
+// ─── Persistence ──────────────────────────────────────────────────────────────
 
 interface InboundMessage {
   senderPhone      : string;
@@ -126,16 +121,32 @@ interface InboundMessage {
 }
 
 async function saveToSupabase(msg: InboundMessage): Promise<void> {
-  const { senderPhone, senderName, messageText, messageId, messageTimestamp, messageType } = msg;
+  const {
+    senderPhone,
+    senderName,
+    messageText,
+    messageId,
+    messageTimestamp,
+    messageType,
+  } = msg;
 
-  // Wrap everything — a DB failure must never propagate to the POST handler
   try {
     const db = getSupabaseAdmin();
 
     // ── STEP 1: Find or create lead ───────────────────────────────────────────
-    // Columns used: id, name, phone, source, status, notes, inquiry_summary,
-    //               last_contacted_at, whatsapp_opted_in, whatsapp_last_message_at
-    // (all confirmed present in leads table across migrations 001 + 002 + 005)
+    //
+    // Columns written on CREATE:
+    //   phone, name, source, status, notes,
+    //   whatsapp_opted_in, whatsapp_last_message_at, last_contacted_at
+    //
+    // Columns written on UPDATE:
+    //   whatsapp_last_message_at, last_contacted_at, name (only if blank)
+    //
+    // Columns intentionally NOT used:
+    //   inquiry_summary — confirmed absent from live DB schema cache
+    //   campaign_tags   — not relevant at inbound time
+    //   tags, lead_score, event_*, budget, venue — not available yet
+    // ─────────────────────────────────────────────────────────────────────────
 
     let leadId: string | null = null;
 
@@ -150,6 +161,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
     }
 
     if (existingLead) {
+      // ── Lead exists ───────────────────────────────────────────────────────
       leadId = existingLead.id;
       console.log("[WhatsApp Webhook] ✅ Existing lead found:", {
         leadId,
@@ -158,13 +170,12 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
         status : existingLead.status,
       });
 
-      // Update timestamps and optionally backfill name
       const { error: leadUpdateErr } = await db
         .from("leads")
         .update({
-          last_contacted_at        : messageTimestamp,
           whatsapp_last_message_at : messageTimestamp,
-          // Only set name if lead has none and WhatsApp profile provided one
+          last_contacted_at        : messageTimestamp,
+          // Backfill name only if the lead has none and WhatsApp profile provided one
           ...(senderName && !existingLead.name ? { name: senderName } : {}),
         })
         .eq("id", leadId);
@@ -174,27 +185,36 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       }
 
     } else {
-      // No existing lead — create one
+      // ── No lead — create new ──────────────────────────────────────────────
+      //
+      // notes holds the first message text (inquiry_summary is NOT used —
+      // it is absent from the live DB even though it appears in migration 001,
+      // meaning that migration was never applied to production).
+      //
+      // source CHECK constraint: 'whatsapp' is a valid value ✓
+      // status CHECK constraint: 'new_inquiry' is a valid value ✓
+      // ─────────────────────────────────────────────────────────────────────
+
       const { data: newLead, error: leadCreateErr } = await db
         .from("leads")
         .insert({
           phone                    : senderPhone,
           name                     : senderName || null,
-          source                   : "whatsapp",          // CHECK constraint: 'whatsapp' ✓
-          status                   : "new_inquiry",        // CHECK constraint: 'new_inquiry' ✓
+          source                   : "whatsapp",
+          status                   : "new_inquiry",
           whatsapp_opted_in        : true,
           whatsapp_last_message_at : messageTimestamp,
           last_contacted_at        : messageTimestamp,
           notes                    : messageText
             ? `First WhatsApp message: "${messageText}"`
             : "WhatsApp contact — no text in first message",
-          inquiry_summary          : messageText || null,
         })
         .select("id")
         .single();
 
       if (leadCreateErr) {
         console.error("[WhatsApp Webhook] ❌ Lead create error:", leadCreateErr.message);
+        // Continue — still attempt to save conversation even without a leadId
       } else {
         leadId = newLead?.id ?? null;
         console.log("[WhatsApp Webhook] 🆕 New lead created:", {
@@ -206,13 +226,11 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
     }
 
     // ── STEP 2: Upsert conversation thread ────────────────────────────────────
-    // Columns used: id, session_id, channel, lead_id, messages (JSONB),
-    //               is_active, updated_at
     //
-    // session_id is UNIQUE — one thread per WhatsApp number.
-    // channel = 'whatsapp' matches the CHECK constraint in 001.
-    // lead_id and messages are confirmed real columns (001_initial_schema.sql).
-    // is_active is a real column (001_initial_schema.sql).
+    // session_id = whatsapp_{phone} — one thread per number, UNIQUE in DB.
+    // Columns used: session_id, channel, lead_id, messages, is_active, updated_at
+    // All confirmed present in 001_initial_schema.sql.
+    // ─────────────────────────────────────────────────────────────────────────
 
     const sessionId = `whatsapp_${senderPhone}`;
 
@@ -226,8 +244,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       console.error("[WhatsApp Webhook] ❌ Conversation lookup error:", convLookupErr.message);
     }
 
-    // Message entry shape: {role, content, timestamp, meta}
-    // Matches the shape used by the website chatbot in this codebase
+    // Message entry — matches {role, content, timestamp} shape used by website chatbot
     const newEntry = {
       role      : "user",
       content   : messageText || `[${messageType} message]`,
@@ -239,6 +256,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
     };
 
     if (existingConv) {
+      // Append to existing JSONB messages array
       const prior: unknown[] = Array.isArray(existingConv.messages)
         ? existingConv.messages
         : [];
@@ -248,7 +266,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
         .update({
           messages   : [...prior, newEntry],
           updated_at : new Date().toISOString(),
-          // Re-link lead if we have one (handles case where lead was created just now)
+          // Re-link lead in case it was just created this request
           ...(leadId ? { lead_id: leadId } : {}),
         })
         .eq("id", existingConv.id);
@@ -260,12 +278,13 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       }
 
     } else {
+      // Create a fresh conversation thread for this contact
       const { data: newConv, error: convCreateErr } = await db
         .from("conversations")
         .insert({
           session_id : sessionId,
-          channel    : "whatsapp",     // CHECK('website'|'whatsapp') — confirmed ✓
-          lead_id    : leadId,
+          channel    : "whatsapp",    // CHECK('website'|'whatsapp') ✓
+          lead_id    : leadId,        // nullable FK — fine if null
           messages   : [newEntry],
           is_active  : true,
         })
@@ -280,12 +299,16 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
     }
 
     // ── STEP 3: Activity log ──────────────────────────────────────────────────
+    //
     // Columns used: lead_id, action, description, performed_by, metadata, channel
     //
-    // description is the correct text column (NOT 'details') — confirmed in 001.
-    // metadata is JSONB — confirmed in 001.
-    // channel was added to activity_logs in 002 — confirmed in 002 + 005.
-    // performed_by has DEFAULT 'system' — confirmed in 001.
+    // 'description' is the correct TEXT column — confirmed in 001_initial_schema.
+    // 'metadata' is the correct JSONB column — confirmed in 001_initial_schema.
+    // 'channel' was added in 002_phase2_whatsapp — confirmed present.
+    // 'details' does NOT exist in this schema — not used.
+    //
+    // Only written if we have a leadId to attach the log to.
+    // ─────────────────────────────────────────────────────────────────────────
 
     if (leadId) {
       const shortText = messageText.length > 120
@@ -317,7 +340,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
     }
 
   } catch (dbErr) {
-    // Catch-all — DB errors must never reach the POST handler
+    // Catch-all — DB errors must never propagate to the POST handler
     console.error("[WhatsApp Webhook] 🔥 saveToSupabase unexpected error:", dbErr);
   }
 }
