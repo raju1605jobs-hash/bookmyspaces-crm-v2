@@ -1,8 +1,21 @@
-// app/api/whatsapp/webhook/route.ts
+// src/app/api/whatsapp/webhook/route.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 1: Receive WhatsApp message → upsert lead → append to conversation
+// Phase 1: Receive → log → upsert lead → upsert conversation → activity log
 // Phase 2 (later): AI reply
 // Phase 3 (later): Send WhatsApp reply
+//
+// Column sources (verified against all SQL migrations 001–007):
+//
+// leads:          id, name, phone, source, status, notes, inquiry_summary,
+//                 last_contacted_at, whatsapp_opted_in, whatsapp_last_message_at
+//
+// conversations:  id, session_id, channel ('website'|'whatsapp'), lead_id,
+//                 messages (JSONB []), is_active, updated_at
+//                 (channel and lead_id ARE real columns — confirmed in 001)
+//
+// activity_logs:  id, lead_id, action, description, performed_by,
+//                 metadata (JSONB), channel
+//                 (channel added in 002; description is the text column, NOT details)
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
@@ -15,7 +28,6 @@ export async function GET(req: NextRequest) {
   const mode      = searchParams.get("hub.mode");
   const token     = searchParams.get("hub.verify_token");
   const challenge = searchParams.get("hub.challenge");
-
   const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
 
   if (mode === "subscribe" && token === verifyToken) {
@@ -27,23 +39,26 @@ export async function GET(req: NextRequest) {
   return new NextResponse("Forbidden", { status: 403 });
 }
 
-// ─── POST: Incoming WhatsApp messages & status updates ────────────────────────
+// ─── POST: Incoming WhatsApp events ──────────────────────────────────────────
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // 1. Full payload log for debugging
-    console.log("[WhatsApp Webhook] 📨 Full incoming payload:", JSON.stringify(body, null, 2));
+    // Log full payload — useful during development
+    console.log(
+      "[WhatsApp Webhook] 📨 Full payload:",
+      JSON.stringify(body, null, 2)
+    );
 
-    // 2. Safely navigate the WhatsApp Cloud API payload structure
+    // Safely walk the WhatsApp Cloud API envelope
     const entry  = body?.entry?.[0];
     const change = entry?.changes?.[0];
     const value  = change?.value;
 
-    // ── Status updates (delivered / read / sent) — not inbound messages ───────
+    // ── Delivery / read / sent status callbacks — not inbound messages ────────
     if (value?.statuses?.length) {
       const s = value.statuses[0];
-      console.log("[WhatsApp Webhook] 🔔 Status update (not a message):", {
+      console.log("[WhatsApp Webhook] 🔔 Status update (no action needed):", {
         messageId : s?.id,
         status    : s?.status,
         recipient : s?.recipient_id,
@@ -52,37 +67,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
-    // ── Inbound message check ─────────────────────────────────────────────────
+    // ── Inbound message guard ─────────────────────────────────────────────────
     const message = value?.messages?.[0];
-
     if (!message) {
-      console.log("[WhatsApp Webhook] ℹ️ No WhatsApp message found in payload");
+      console.log("[WhatsApp Webhook] ℹ️  No message in payload — returning 200");
       return NextResponse.json({ status: "ok" }, { status: 200 });
     }
 
-    // 3. Extract fields
-    const senderPhone    : string = message.from                         ?? "unknown";
-    const messageId      : string = message.id                           ?? "unknown";
-    const rawTimestamp   : string = message.timestamp                    ?? "";
-    const messageText    : string = message.text?.body                   ?? "";
-    const senderName     : string = value?.contacts?.[0]?.profile?.name ?? "";
-    const messageType    : string = message.type                         ?? "unknown";
+    // ── Extract message fields ────────────────────────────────────────────────
+    const senderPhone : string = message.from                         ?? "unknown";
+    const messageId   : string = message.id                           ?? "unknown";
+    const rawTs       : string = message.timestamp                    ?? "";
+    const messageText : string = message.text?.body                   ?? "";
+    const senderName  : string = value?.contacts?.[0]?.profile?.name ?? "";
+    const messageType : string = message.type                         ?? "unknown";
 
-    // Convert Unix timestamp → ISO string (Meta sends seconds, not milliseconds)
-    const messageTimestamp = rawTimestamp
-      ? new Date(parseInt(rawTimestamp, 10) * 1000).toISOString()
+    // WhatsApp timestamps are Unix seconds → convert to ISO string
+    const messageTimestamp = rawTs
+      ? new Date(parseInt(rawTs, 10) * 1000).toISOString()
       : new Date().toISOString();
 
-    console.log("[WhatsApp Webhook] 💬 Message received:", {
+    console.log("[WhatsApp Webhook] 💬 Inbound message:", {
       senderPhone,
       senderName       : senderName  || "(no profile name)",
-      messageText      : messageText || `[non-text: ${messageType}]`,
+      messageText      : messageText || `[non-text type: ${messageType}]`,
       messageId,
       messageTimestamp,
     });
 
-    // 4. Save to Supabase — wrapped in its own try/catch so a DB error
-    //    NEVER causes a 500 back to Meta (which would trigger retries).
+    // ── Persist to Supabase — never let this block Meta getting 200 ───────────
     await saveToSupabase({
       senderPhone,
       senderName,
@@ -92,19 +105,18 @@ export async function POST(req: NextRequest) {
       messageType,
     });
 
-    // 5. Always return 200 quickly to Meta
-    return NextResponse.json({ status: "ok" }, { status: 200 });
-
   } catch (err) {
-    // Top-level safety net — still return 200 so Meta doesn't retry infinitely
-    console.error("[WhatsApp Webhook] 🔥 Unexpected top-level error:", err);
-    return NextResponse.json({ status: "ok" }, { status: 200 });
+    // Top-level catch — still return 200 so Meta never retries indefinitely
+    console.error("[WhatsApp Webhook] 🔥 Unexpected error in POST handler:", err);
   }
+
+  // Always return 200 to Meta
+  return NextResponse.json({ status: "ok" }, { status: 200 });
 }
 
-// ─── Supabase persistence ─────────────────────────────────────────────────────
+// ─── Persistence helper ───────────────────────────────────────────────────────
 
-interface MessagePayload {
+interface InboundMessage {
   senderPhone      : string;
   senderName       : string;
   messageText      : string;
@@ -113,66 +125,63 @@ interface MessagePayload {
   messageType      : string;
 }
 
-async function saveToSupabase(payload: MessagePayload): Promise<void> {
-  const {
-    senderPhone,
-    senderName,
-    messageText,
-    messageId,
-    messageTimestamp,
-    messageType,
-  } = payload;
+async function saveToSupabase(msg: InboundMessage): Promise<void> {
+  const { senderPhone, senderName, messageText, messageId, messageTimestamp, messageType } = msg;
 
+  // Wrap everything — a DB failure must never propagate to the POST handler
   try {
-    const supabase = getSupabaseAdmin();
+    const db = getSupabaseAdmin();
 
-    // ── STEP A: Find or create lead ──────────────────────────────────────────
+    // ── STEP 1: Find or create lead ───────────────────────────────────────────
+    // Columns used: id, name, phone, source, status, notes, inquiry_summary,
+    //               last_contacted_at, whatsapp_opted_in, whatsapp_last_message_at
+    // (all confirmed present in leads table across migrations 001 + 002 + 005)
+
     let leadId: string | null = null;
 
-    // Look up existing lead by phone (uses idx_leads_phone / idx_leads_phone_dedup)
-    const { data: existingLead, error: lookupError } = await supabase
+    const { data: existingLead, error: leadLookupErr } = await db
       .from("leads")
       .select("id, name, phone, status")
       .eq("phone", senderPhone)
       .maybeSingle();
 
-    if (lookupError) {
-      console.error("[WhatsApp Webhook] ❌ Supabase error — lead lookup:", lookupError.message);
+    if (leadLookupErr) {
+      console.error("[WhatsApp Webhook] ❌ Lead lookup error:", leadLookupErr.message);
     }
 
     if (existingLead) {
-      // Lead exists — link and update contact timestamps
       leadId = existingLead.id;
-      console.log("[WhatsApp Webhook] ✅ Lead found:", {
+      console.log("[WhatsApp Webhook] ✅ Existing lead found:", {
         leadId,
-        name   : existingLead.name   || "(no name)",
+        name   : existingLead.name   ?? "(no name)",
         phone  : existingLead.phone,
         status : existingLead.status,
       });
 
-      const { error: updateError } = await supabase
+      // Update timestamps and optionally backfill name
+      const { error: leadUpdateErr } = await db
         .from("leads")
         .update({
-          whatsapp_last_message_at : messageTimestamp,
           last_contacted_at        : messageTimestamp,
-          // Backfill name from WhatsApp profile if we don't have one yet
+          whatsapp_last_message_at : messageTimestamp,
+          // Only set name if lead has none and WhatsApp profile provided one
           ...(senderName && !existingLead.name ? { name: senderName } : {}),
         })
         .eq("id", leadId);
 
-      if (updateError) {
-        console.error("[WhatsApp Webhook] ❌ Supabase error — updating lead:", updateError.message);
+      if (leadUpdateErr) {
+        console.error("[WhatsApp Webhook] ❌ Lead update error:", leadUpdateErr.message);
       }
 
     } else {
-      // No lead found — create one with source = "whatsapp"
-      const { data: newLead, error: createError } = await supabase
+      // No existing lead — create one
+      const { data: newLead, error: leadCreateErr } = await db
         .from("leads")
         .insert({
           phone                    : senderPhone,
           name                     : senderName || null,
-          source                   : "whatsapp",
-          status                   : "new_inquiry",
+          source                   : "whatsapp",          // CHECK constraint: 'whatsapp' ✓
+          status                   : "new_inquiry",        // CHECK constraint: 'new_inquiry' ✓
           whatsapp_opted_in        : true,
           whatsapp_last_message_at : messageTimestamp,
           last_contacted_at        : messageTimestamp,
@@ -184,34 +193,42 @@ async function saveToSupabase(payload: MessagePayload): Promise<void> {
         .select("id")
         .single();
 
-      if (createError) {
-        console.error("[WhatsApp Webhook] ❌ Supabase error — creating lead:", createError.message);
+      if (leadCreateErr) {
+        console.error("[WhatsApp Webhook] ❌ Lead create error:", leadCreateErr.message);
       } else {
         leadId = newLead?.id ?? null;
-        console.log("[WhatsApp Webhook] 🆕 Lead created:", {
+        console.log("[WhatsApp Webhook] 🆕 New lead created:", {
           leadId,
-          senderPhone,
-          senderName : senderName || "(no name)",
+          phone : senderPhone,
+          name  : senderName || "(no name)",
         });
       }
     }
 
-    // ── STEP B: Upsert conversation thread ───────────────────────────────────
-    // One persistent conversation per WhatsApp number: whatsapp_{phone}
+    // ── STEP 2: Upsert conversation thread ────────────────────────────────────
+    // Columns used: id, session_id, channel, lead_id, messages (JSONB),
+    //               is_active, updated_at
+    //
+    // session_id is UNIQUE — one thread per WhatsApp number.
+    // channel = 'whatsapp' matches the CHECK constraint in 001.
+    // lead_id and messages are confirmed real columns (001_initial_schema.sql).
+    // is_active is a real column (001_initial_schema.sql).
+
     const sessionId = `whatsapp_${senderPhone}`;
 
-    const { data: existingConv, error: convLookupError } = await supabase
+    const { data: existingConv, error: convLookupErr } = await db
       .from("conversations")
       .select("id, messages")
       .eq("session_id", sessionId)
       .maybeSingle();
 
-    if (convLookupError) {
-      console.error("[WhatsApp Webhook] ❌ Supabase error — conversation lookup:", convLookupError.message);
+    if (convLookupErr) {
+      console.error("[WhatsApp Webhook] ❌ Conversation lookup error:", convLookupErr.message);
     }
 
-    // Message entry shape matches {role, content, timestamp} used by website chatbot
-    const newMessageEntry = {
+    // Message entry shape: {role, content, timestamp, meta}
+    // Matches the shape used by the website chatbot in this codebase
+    const newEntry = {
       role      : "user",
       content   : messageText || `[${messageType} message]`,
       timestamp : messageTimestamp,
@@ -222,56 +239,60 @@ async function saveToSupabase(payload: MessagePayload): Promise<void> {
     };
 
     if (existingConv) {
-      // Append to existing messages JSONB array
-      const currentMessages: unknown[] = Array.isArray(existingConv.messages)
+      const prior: unknown[] = Array.isArray(existingConv.messages)
         ? existingConv.messages
         : [];
 
-      const { error: convUpdateError } = await supabase
+      const { error: convUpdateErr } = await db
         .from("conversations")
         .update({
-          messages   : [...currentMessages, newMessageEntry],
+          messages   : [...prior, newEntry],
           updated_at : new Date().toISOString(),
-          // Link lead if not already linked
+          // Re-link lead if we have one (handles case where lead was created just now)
           ...(leadId ? { lead_id: leadId } : {}),
         })
         .eq("id", existingConv.id);
 
-      if (convUpdateError) {
-        console.error("[WhatsApp Webhook] ❌ Supabase error — updating conversation:", convUpdateError.message);
+      if (convUpdateErr) {
+        console.error("[WhatsApp Webhook] ❌ Conversation update error:", convUpdateErr.message);
       } else {
-        console.log("[WhatsApp Webhook] 💾 Message saved to conversation:", existingConv.id);
+        console.log("[WhatsApp Webhook] 💾 Message appended to conversation:", existingConv.id);
       }
 
     } else {
-      // Create fresh conversation thread for this contact
-      const { data: newConv, error: convCreateError } = await supabase
+      const { data: newConv, error: convCreateErr } = await db
         .from("conversations")
         .insert({
           session_id : sessionId,
-          channel    : "whatsapp",
+          channel    : "whatsapp",     // CHECK('website'|'whatsapp') — confirmed ✓
           lead_id    : leadId,
-          messages   : [newMessageEntry],
+          messages   : [newEntry],
           is_active  : true,
         })
         .select("id")
         .single();
 
-      if (convCreateError) {
-        console.error("[WhatsApp Webhook] ❌ Supabase error — creating conversation:", convCreateError.message);
+      if (convCreateErr) {
+        console.error("[WhatsApp Webhook] ❌ Conversation create error:", convCreateErr.message);
       } else {
         console.log("[WhatsApp Webhook] 💾 New conversation created:", newConv?.id);
       }
     }
 
-    // ── STEP C: Activity log ─────────────────────────────────────────────────
-    // Only written if we have a lead to attach it to
+    // ── STEP 3: Activity log ──────────────────────────────────────────────────
+    // Columns used: lead_id, action, description, performed_by, metadata, channel
+    //
+    // description is the correct text column (NOT 'details') — confirmed in 001.
+    // metadata is JSONB — confirmed in 001.
+    // channel was added to activity_logs in 002 — confirmed in 002 + 005.
+    // performed_by has DEFAULT 'system' — confirmed in 001.
+
     if (leadId) {
       const shortText = messageText.length > 120
-        ? messageText.slice(0, 120) + "…"
+        ? `${messageText.slice(0, 120)}…`
         : messageText;
 
-      const { error: logError } = await supabase
+      const { error: logErr } = await db
         .from("activity_logs")
         .insert({
           lead_id      : leadId,
@@ -288,15 +309,15 @@ async function saveToSupabase(payload: MessagePayload): Promise<void> {
           },
         });
 
-      if (logError) {
-        console.error("[WhatsApp Webhook] ❌ Supabase error — activity log:", logError.message);
+      if (logErr) {
+        console.error("[WhatsApp Webhook] ❌ Activity log error:", logErr.message);
       } else {
         console.log("[WhatsApp Webhook] 📋 Activity logged for lead:", leadId);
       }
     }
 
   } catch (dbErr) {
-    // Never let DB errors bubble up — Meta must always receive 200
+    // Catch-all — DB errors must never reach the POST handler
     console.error("[WhatsApp Webhook] 🔥 saveToSupabase unexpected error:", dbErr);
   }
 }
