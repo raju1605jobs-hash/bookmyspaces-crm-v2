@@ -18,7 +18,7 @@
 //
 // ── AI engine ────────────────────────────────────────────────────────────────
 // Primary:  Anthropic Claude  (ANTHROPIC_API_KEY)
-// Model:    claude-3-5-sonnet-20241022   ← fixed from broken claude-sonnet-4-20250514
+// Model:    process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022" (configurable)
 // Fallback: returns null on any failure — webhook still returns 200
 // RAG:      knowledge_chunks queried via Supabase full-text search
 // ─────────────────────────────────────────────────────────────────────────────
@@ -27,8 +27,11 @@ import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
-// The only model string in this file — change here to update everywhere
-const ANTHROPIC_MODEL = "claude-3-5-sonnet-20241022";
+// Model is configurable via Vercel env var ANTHROPIC_MODEL.
+// Fallback: claude-3-5-haiku-20241022 (widely available, fast, cost-efficient).
+// To override: set ANTHROPIC_MODEL=claude-3-opus-20240229 in Vercel env vars.
+const ANTHROPIC_MODEL =
+  process.env.ANTHROPIC_MODEL || "claude-3-5-haiku-20241022";
 
 // ─── GET: Meta webhook verification ──────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -519,15 +522,17 @@ Keep your reply short, friendly, and practical. This is WhatsApp — not email.`
 
   } catch (err: unknown) {
     // ── Detailed Anthropic error logging ──────────────────────────────────────
-    // Logs status, message, response body, and the model name so failures
-    // are immediately diagnosable in Vercel logs without guessing.
+    // Every field the Anthropic SDK can return is logged individually so the
+    // root cause is immediately visible in Vercel logs — no guessing needed.
     const anyErr = err as Record<string, unknown>;
     console.error("[WhatsApp Webhook] ❌ Anthropic AI error:", {
-      model    : ANTHROPIC_MODEL,
-      status   : anyErr?.status   ?? anyErr?.statusCode ?? "unknown",
-      message  : anyErr?.message  ?? String(err),
-      response : anyErr?.response ?? anyErr?.body       ?? null,
-      type     : anyErr?.error    ?? null,
+      model      : ANTHROPIC_MODEL,
+      status     : anyErr?.status     ?? "unknown",
+      statusCode : anyErr?.statusCode ?? "unknown",
+      message    : anyErr?.message    ?? String(err),
+      error      : anyErr?.error      ?? null,
+      response   : anyErr?.response   ?? null,
+      body       : anyErr?.body       ?? null,
     });
     return null;   // Never throw — webhook must always complete with 200
   }
