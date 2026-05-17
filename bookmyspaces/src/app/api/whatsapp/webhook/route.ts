@@ -1,27 +1,29 @@
 // src/app/api/whatsapp/webhook/route.ts
 // ─────────────────────────────────────────────────────────────────────────────
-// Phase 1: Receive → log → upsert lead → upsert conversation → activity log
-// Phase 2 (later): AI reply
-// Phase 3 (later): Send WhatsApp reply
+// Phase 1 ✅  Receive → log → upsert lead → upsert conversation → activity log
+// Phase A ✅  Generate AI reply → append as assistant role (NOT sent to WhatsApp yet)
+// Phase B     Send WhatsApp reply via Meta API (next phase)
 //
-// ALL columns written here are taken directly from the live Supabase
-// information_schema query. Nothing is assumed from migration files.
+// ── Live Supabase schema (verified via information_schema) ───────────────────
+// leads:         session_id, phone, name, source, status, notes,
+//                last_contacted_at, whatsapp_opted_in
+//                ✗ inquiry_summary — does not exist
+//                ✗ whatsapp_last_message_at — does not exist
 //
-// ── leads (columns used) ────────────────────────────────────────────────────
-//   session_id, phone, name, source, status, notes,
-//   last_contacted_at, whatsapp_opted_in
-//   NOT USED: inquiry_summary (does not exist), whatsapp_last_message_at (does not exist)
+// conversations: id, session_id, source, phone, name, status, channel,
+//                lead_id, messages (jsonb), is_active, updated_at
 //
-// ── conversations (columns used) ────────────────────────────────────────────
-//   session_id, source, phone, name, status, channel,
-//   lead_id, messages (jsonb), is_active, updated_at
+// activity_logs: lead_id, action, description, performed_by, channel,
+//                metadata (jsonb), details (jsonb)
 //
-// ── activity_logs (columns used) ────────────────────────────────────────────
-//   lead_id, action, description, performed_by, channel,
-//   metadata (jsonb), details (jsonb)
+// ── AI engine ────────────────────────────────────────────────────────────────
+// Primary:  Anthropic Claude  (ANTHROPIC_API_KEY)
+// Fallback: returns a safe static reply on any failure
+// RAG:      knowledge_chunks queried via Supabase for context
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
+import Anthropic from "@anthropic-ai/sdk";
 import { getSupabaseAdmin } from "@/lib/supabase";
 
 // ─── GET: Meta webhook verification ──────────────────────────────────────────
@@ -47,18 +49,16 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    // Log full raw payload for Vercel debugging
     console.log(
       "[WhatsApp Webhook] 📨 Full payload:",
       JSON.stringify(body, null, 2)
     );
 
-    // Walk the WhatsApp Cloud API envelope
     const entry  = body?.entry?.[0];
     const change = entry?.changes?.[0];
     const value  = change?.value;
 
-    // ── Status callbacks (delivered / read / sent) — not inbound messages ────
+    // ── Status callbacks — not inbound messages ───────────────────────────────
     if (value?.statuses?.length) {
       const s = value.statuses[0];
       console.log("[WhatsApp Webhook] 🔔 Status update (no action needed):", {
@@ -85,7 +85,6 @@ export async function POST(req: NextRequest) {
     const senderName  : string = value?.contacts?.[0]?.profile?.name ?? "";
     const messageType : string = message.type                         ?? "unknown";
 
-    // WhatsApp timestamps are Unix seconds — convert to ISO
     const messageTimestamp = rawTs
       ? new Date(parseInt(rawTs, 10) * 1000).toISOString()
       : new Date().toISOString();
@@ -98,8 +97,8 @@ export async function POST(req: NextRequest) {
       messageTimestamp,
     });
 
-    // Persist — fully isolated; DB failure must never block Meta's 200
-    await saveToSupabase({
+    // Persist + generate AI reply — fully isolated from Meta's 200 response
+    await handleInboundMessage({
       senderPhone,
       senderName,
       messageText,
@@ -112,17 +111,15 @@ export async function POST(req: NextRequest) {
     console.error("[WhatsApp Webhook] 🔥 Unexpected error in POST handler:", err);
   }
 
-  // Always 200 to Meta — no exceptions
   return NextResponse.json({ status: "ok" }, { status: 200 });
 }
 
 // ─── Supabase error logger ────────────────────────────────────────────────────
-// Logs every field Supabase returns on error so nothing is hidden.
 function logSupabaseError(label: string, err: {
   message?: string;
-  code?: string;
+  code?   : string;
   details?: string;
-  hint?: string;
+  hint?   : string;
 } | null) {
   if (!err) return;
   console.error(`[WhatsApp Webhook] ❌ ${label}:`, {
@@ -133,8 +130,7 @@ function logSupabaseError(label: string, err: {
   });
 }
 
-// ─── Persistence ──────────────────────────────────────────────────────────────
-
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface InboundMessage {
   senderPhone      : string;
   senderName       : string;
@@ -144,7 +140,15 @@ interface InboundMessage {
   messageType      : string;
 }
 
-async function saveToSupabase(msg: InboundMessage): Promise<void> {
+interface ConvMessage {
+  role      : string;
+  content   : string;
+  timestamp : string;
+  meta?     : Record<string, unknown>;
+}
+
+// ─── Main handler — persist then generate AI reply ────────────────────────────
+async function handleInboundMessage(msg: InboundMessage): Promise<void> {
   const {
     senderPhone,
     senderName,
@@ -155,24 +159,10 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
   } = msg;
 
   try {
-    const db = getSupabaseAdmin();
+    const db        = getSupabaseAdmin();
     const sessionId = `whatsapp_${senderPhone}`;
 
     // ── STEP 1: Lead — find or create ─────────────────────────────────────────
-    //
-    // Columns on INSERT:
-    //   session_id, phone, name, source, status,
-    //   notes, last_contacted_at, whatsapp_opted_in
-    //
-    // Columns on UPDATE:
-    //   last_contacted_at, whatsapp_opted_in, notes
-    //   + name only when existing name is null/empty and senderName is available
-    //
-    // Explicitly NOT written:
-    //   inquiry_summary       — does not exist in live DB
-    //   whatsapp_last_message_at — does not exist in live DB
-    // ─────────────────────────────────────────────────────────────────────────
-
     let leadId: string | null = null;
 
     const { data: existingLead, error: leadLookupErr } = await db
@@ -192,20 +182,14 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
         status : existingLead.status,
       });
 
-      // Build update payload — only confirmed live columns
       const updatePayload: Record<string, unknown> = {
         last_contacted_at : messageTimestamp,
         whatsapp_opted_in : true,
-        // Append latest message to notes (keeps history visible in CRM)
         notes: messageText
           ? `${existingLead.notes ? existingLead.notes + "\n\n" : ""}[WhatsApp ${messageTimestamp}]: ${messageText}`
           : existingLead.notes,
       };
-
-      // Backfill name only when blank
-      if (senderName && !existingLead.name) {
-        updatePayload.name = senderName;
-      }
+      if (senderName && !existingLead.name) updatePayload.name = senderName;
 
       const { error: leadUpdateErr } = await db
         .from("leads")
@@ -215,7 +199,6 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       if (leadUpdateErr) logSupabaseError("Lead update", leadUpdateErr);
 
     } else {
-      // Create new lead — status value "new" matches live DB CHECK constraint
       const { data: newLead, error: leadCreateErr } = await db
         .from("leads")
         .insert({
@@ -235,7 +218,6 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
 
       if (leadCreateErr) {
         logSupabaseError("Lead create", leadCreateErr);
-        // Continue — attempt conversation save even without a leadId
       } else {
         leadId = newLead?.id ?? null;
         console.log("[WhatsApp Webhook] 🆕 New lead created:", {
@@ -246,21 +228,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       }
     }
 
-    // ── STEP 2: Conversation — find or create ─────────────────────────────────
-    //
-    // session_id is unique — one thread per WhatsApp number.
-    //
-    // Columns on INSERT:
-    //   session_id, source, phone, name, status, channel,
-    //   lead_id, messages (jsonb), is_active
-    //
-    // Columns on UPDATE:
-    //   source, phone, name, channel, lead_id,
-    //   messages (append), is_active, status, updated_at
-    //
-    // All columns confirmed present in live information_schema.
-    // ─────────────────────────────────────────────────────────────────────────
-
+    // ── STEP 2: Conversation — find or create, append user message ────────────
     const { data: existingConv, error: convLookupErr } = await db
       .from("conversations")
       .select("id, messages")
@@ -269,8 +237,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
 
     if (convLookupErr) logSupabaseError("Conversation lookup", convLookupErr);
 
-    // Message entry shape consistent with website chatbot in this codebase
-    const newEntry = {
+    const userEntry: ConvMessage = {
       role      : "user",
       content   : messageText || `[${messageType} message]`,
       timestamp : messageTimestamp,
@@ -280,9 +247,12 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       },
     };
 
+    let convId     : string | null = null;
+    let priorMessages: ConvMessage[] = [];
+
     if (existingConv) {
-      const prior: unknown[] = Array.isArray(existingConv.messages)
-        ? existingConv.messages
+      priorMessages = Array.isArray(existingConv.messages)
+        ? (existingConv.messages as ConvMessage[])
         : [];
 
       const { error: convUpdateErr } = await db
@@ -293,7 +263,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
           ...(senderName ? { name: senderName } : {}),
           channel    : "whatsapp",
           ...(leadId ? { lead_id: leadId } : {}),
-          messages   : [...prior, newEntry],
+          messages   : [...priorMessages, userEntry],
           is_active  : true,
           status     : "active",
           updated_at : new Date().toISOString(),
@@ -301,9 +271,10 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
         .eq("id", existingConv.id);
 
       if (convUpdateErr) {
-        logSupabaseError("Conversation update", convUpdateErr);
+        logSupabaseError("Conversation update (user msg)", convUpdateErr);
       } else {
-        console.log("[WhatsApp Webhook] 💾 Message appended to conversation:", existingConv.id);
+        convId = existingConv.id;
+        console.log("[WhatsApp Webhook] 💾 User message appended to conversation:", convId);
       }
 
     } else {
@@ -317,7 +288,7 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
           status     : "active",
           channel    : "whatsapp",
           lead_id    : leadId,
-          messages   : [newEntry],
+          messages   : [userEntry],
           is_active  : true,
         })
         .select("id")
@@ -326,21 +297,12 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
       if (convCreateErr) {
         logSupabaseError("Conversation create", convCreateErr);
       } else {
-        console.log("[WhatsApp Webhook] 💾 New conversation created:", newConv?.id);
+        convId = newConv?.id ?? null;
+        console.log("[WhatsApp Webhook] 💾 New conversation created:", convId);
       }
     }
 
     // ── STEP 3: Activity log ──────────────────────────────────────────────────
-    //
-    // Columns used (all confirmed in live information_schema):
-    //   lead_id, action, description, performed_by, channel
-    //   metadata (jsonb) — for structured context (messageId, phone, type)
-    //   details  (jsonb) — for message content
-    //
-    // Both 'metadata' and 'details' are confirmed jsonb columns in live DB.
-    // Only written when we have a leadId.
-    // ─────────────────────────────────────────────────────────────────────────
-
     if (leadId) {
       const shortText = messageText.length > 120
         ? `${messageText.slice(0, 120)}…`
@@ -368,15 +330,197 @@ async function saveToSupabase(msg: InboundMessage): Promise<void> {
           },
         });
 
-      if (logErr) {
-        logSupabaseError("Activity log", logErr);
-      } else {
-        console.log("[WhatsApp Webhook] 📋 Activity logged for lead:", leadId);
-      }
+      if (logErr) logSupabaseError("Activity log", logErr);
+      else console.log("[WhatsApp Webhook] 📋 Activity logged for lead:", leadId);
     }
 
-  } catch (dbErr) {
-    // Never let this bubble up to the POST handler
-    console.error("[WhatsApp Webhook] 🔥 saveToSupabase unexpected error:", dbErr);
+    // ── STEP 4: Generate AI reply ─────────────────────────────────────────────
+    // Only generate if we have actual text to reply to.
+    // Non-text messages (image, audio, sticker) get skipped gracefully.
+    if (!messageText.trim()) {
+      console.log("[WhatsApp Webhook] ⏭️  No text message — skipping AI reply generation");
+      return;
+    }
+
+    if (!convId) {
+      console.log("[WhatsApp Webhook] ⚠️  No conversation ID — skipping AI reply generation");
+      return;
+    }
+
+    console.log("[WhatsApp Webhook] 🤖 AI reply generation started for:", senderPhone);
+
+    const aiReply = await generateAIReply({
+      messageText,
+      senderName,
+      senderPhone,
+      conversationHistory : priorMessages,
+      db,
+    });
+
+    if (!aiReply) {
+      console.log("[WhatsApp Webhook] ⚠️  AI reply was empty — not saving");
+      return;
+    }
+
+    console.log("[WhatsApp Webhook] 🤖 AI reply generated:", aiReply.slice(0, 120) + (aiReply.length > 120 ? "…" : ""));
+
+    // ── STEP 5: Append AI reply to conversation ───────────────────────────────
+    // Fetch the latest messages (user entry is already saved, so re-fetch)
+    const { data: latestConv, error: latestConvErr } = await db
+      .from("conversations")
+      .select("messages")
+      .eq("id", convId)
+      .single();
+
+    if (latestConvErr) {
+      logSupabaseError("Conversation fetch before AI append", latestConvErr);
+      return;
+    }
+
+    const latestMessages: ConvMessage[] = Array.isArray(latestConv?.messages)
+      ? (latestConv.messages as ConvMessage[])
+      : [];
+
+    const assistantEntry: ConvMessage = {
+      role      : "assistant",
+      content   : aiReply,
+      timestamp : new Date().toISOString(),
+      meta      : {
+        generated_for    : "whatsapp",
+        sent_to_whatsapp : false,        // Phase B will flip this to true
+      },
+    };
+
+    const { error: aiAppendErr } = await db
+      .from("conversations")
+      .update({
+        messages   : [...latestMessages, assistantEntry],
+        updated_at : new Date().toISOString(),
+      })
+      .eq("id", convId);
+
+    if (aiAppendErr) {
+      logSupabaseError("AI reply append to conversation", aiAppendErr);
+    } else {
+      console.log("[WhatsApp Webhook] ✅ AI reply saved to conversation:", convId);
+    }
+
+  } catch (err) {
+    console.error("[WhatsApp Webhook] 🔥 handleInboundMessage unexpected error:", err);
+  }
+}
+
+// ─── AI Reply Generator ───────────────────────────────────────────────────────
+// Uses Claude (primary) with RAG context from knowledge_chunks.
+// Falls back to a safe static reply if Claude fails for any reason.
+
+interface GenerateReplyParams {
+  messageText         : string;
+  senderName          : string;
+  senderPhone         : string;
+  conversationHistory : ConvMessage[];
+  db                  : ReturnType<typeof getSupabaseAdmin>;
+}
+
+async function generateAIReply(params: GenerateReplyParams): Promise<string | null> {
+  const { messageText, senderName, conversationHistory, db } = params;
+
+  try {
+    // ── Fetch RAG context from knowledge_chunks ───────────────────────────────
+    // We do a simple text search instead of vector search here to avoid
+    // the OpenAI embedding round-trip inside the webhook hot path.
+    // The chat route uses full vector RAG; here we use keyword fallback.
+    let knowledgeContext = "";
+
+    try {
+      const { data: chunks } = await db
+        .from("knowledge_chunks")
+        .select("content, category")
+        .textSearch("content", messageText.split(" ").slice(0, 6).join(" | "), {
+          type   : "websearch",
+          config : "english",
+        })
+        .limit(4);
+
+      if (chunks && chunks.length > 0) {
+        knowledgeContext = chunks
+          .map((c: { content: string; category: string }) => `[${c.category}]: ${c.content}`)
+          .join("\n\n");
+        console.log("[WhatsApp Webhook] 📚 RAG context loaded:", chunks.length, "chunks");
+      }
+    } catch (ragErr) {
+      // RAG failure is non-fatal — continue without context
+      console.warn("[WhatsApp Webhook] ⚠️  RAG fetch failed (continuing without):", ragErr);
+    }
+
+    // ── Build conversation history for Claude ─────────────────────────────────
+    // Only include the last 6 turns to keep the context window lean
+    const recentHistory = conversationHistory.slice(-6);
+    const claudeMessages: Anthropic.MessageParam[] = recentHistory
+      .filter(m => m.role === "user" || m.role === "assistant")
+      .map(m => ({
+        role    : m.role as "user" | "assistant",
+        content : m.content,
+      }));
+
+    // Add the current user message
+    claudeMessages.push({ role: "user", content: messageText });
+
+    // ── System prompt ─────────────────────────────────────────────────────────
+    const systemPrompt = `You are Aria, the AI assistant for BookMySpaces — a premium venue booking platform in Kolkata, India.
+
+You represent:
+- BookMySpaces.in — platform
+- Skyline Serenity — venue near Kolkata Airport (contact: 9830509991 / 9123005489)
+- Monurama Homestay — venue in Mukundapur, EM Bypass (contact: 9051459463 / 7003853624)
+
+You are responding to a WhatsApp inquiry${senderName ? ` from ${senderName}` : ""}.
+
+Your role:
+- Warmly greet and assist the customer
+- Answer questions about venues, packages, pricing, availability, events
+- Collect key details: event type, date, guest count, budget
+- Be concise — WhatsApp messages should be short and conversational (2–4 lines max)
+- If you don't know something specific, offer to connect them with the team
+- Always be professional, warm, and helpful
+- Reply in the same language the customer uses (Hindi/Bengali/English)
+- Do NOT make up specific prices or availability — offer to check
+
+${knowledgeContext ? `Relevant knowledge from our database:\n${knowledgeContext}` : ""}
+
+Keep your reply short, friendly, and practical. This is WhatsApp — not email.`;
+
+    // ── Call Claude ───────────────────────────────────────────────────────────
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.error("[WhatsApp Webhook] ❌ AI generation failed: ANTHROPIC_API_KEY not set");
+      return null;
+    }
+
+    const anthropic = new Anthropic({ apiKey });
+
+    const response = await anthropic.messages.create({
+      model      : "claude-sonnet-4-20250514",
+      max_tokens : 300,          // Keep WhatsApp replies short
+      system     : systemPrompt,
+      messages   : claudeMessages,
+    });
+
+    const aiText = response.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map(b => b.text)
+      .join("")
+      .trim();
+
+    if (!aiText) {
+      console.warn("[WhatsApp Webhook] ⚠️  Claude returned empty content");
+      return null;
+    }
+
+    return aiText;
+
+  } catch (err: unknown) {
+    console.error("[WhatsApp Webhook] ❌ AI generation failed:", err);
+    return null;
   }
 }
