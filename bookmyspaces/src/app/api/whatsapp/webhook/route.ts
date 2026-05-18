@@ -416,13 +416,25 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
       ? (latestConv.messages as ConvMessage[])
       : [];
 
+    // ── Duplicate-send guard ──────────────────────────────────────────────────
+    // If the most recent assistant message was already sent, skip to avoid
+    // double-messaging the user (e.g. on Meta retry or Vercel re-invocation).
+    const lastMsg = latestMessages[latestMessages.length - 1];
+    if (
+      lastMsg?.role === "assistant" &&
+      lastMsg?.meta?.sent_to_whatsapp === true
+    ) {
+      console.log("[WhatsApp Webhook] ⏭️  WhatsApp send skipped — already sent");
+      return;
+    }
+
     const assistantEntry: ConvMessage = {
       role      : "assistant",
       content   : aiReply,
       timestamp : new Date().toISOString(),
       meta      : {
         generated_for    : "whatsapp",
-        sent_to_whatsapp : false,   // Phase B flips this to true
+        sent_to_whatsapp : false,   // updated below after send attempt
       },
     };
 
@@ -436,8 +448,66 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
 
     if (aiSaveErr) {
       logDbErr("STEP H assistant reply save", aiSaveErr);
+      return;   // don't attempt send if we couldn't save the record
+    }
+
+    console.log("[WhatsApp Webhook] STEP H — assistant reply saved to conversation:", convId);
+
+    // ── Phase B: Send reply via Meta WhatsApp Cloud API ───────────────────────
+    const sendResult = await sendWhatsAppTextMessage(senderPhone, aiReply);
+
+    // Re-fetch again so we patch the exact messages array now on disk
+    const { data: postSendConv, error: postSendFetchErr } = await db
+      .from("conversations")
+      .select("messages")
+      .eq("id", convId)
+      .single();
+
+    if (postSendFetchErr) {
+      logDbErr("STEP H post-send conversation fetch", postSendFetchErr);
+      return;
+    }
+
+    const postSendMessages: ConvMessage[] = Array.isArray(postSendConv?.messages)
+      ? (postSendConv.messages as ConvMessage[])
+      : [];
+
+    // Find the assistant entry we just appended (last item) and patch its meta
+    const patchedMessages = postSendMessages.map((m, idx) => {
+      if (idx !== postSendMessages.length - 1 || m.role !== "assistant") return m;
+      return {
+        ...m,
+        meta: sendResult.success
+          ? {
+              ...m.meta,
+              sent_to_whatsapp    : true,
+              whatsapp_sent_at    : new Date().toISOString(),
+              whatsapp_message_id : sendResult.messageId ?? null,
+            }
+          : {
+              ...m.meta,
+              sent_to_whatsapp     : false,
+              whatsapp_send_error  : sendResult.error ?? "unknown_send_error",
+            },
+      };
+    });
+
+    const { error: metaUpdateErr } = await db
+      .from("conversations")
+      .update({
+        messages   : patchedMessages,
+        updated_at : new Date().toISOString(),
+      })
+      .eq("id", convId);
+
+    if (metaUpdateErr) {
+      logDbErr("STEP H send-status meta update", metaUpdateErr);
+      // non-fatal — message was already sent; just metadata didn't update
     } else {
-      console.log("[WhatsApp Webhook] STEP H — assistant reply saved to conversation:", convId);
+      console.log(
+        "[WhatsApp Webhook] STEP H — send metadata updated. sent_to_whatsapp:",
+        sendResult.success
+      );
     }
 
   } catch (err) {
@@ -579,5 +649,101 @@ Keep your reply short, friendly, and practical. This is WhatsApp — not email.`
       response : anyErr?.response ?? anyErr?.body ?? null,
     });
     return null;
+  }
+}
+
+// ─── Meta WhatsApp Cloud API — send outbound text message ────────────────────
+// Env vars required:
+//   WHATSAPP_ACCESS_TOKEN      — permanent or temporary system user token
+//   WHATSAPP_PHONE_NUMBER_ID   — numeric ID from Meta Business dashboard
+//
+// Returns { success, messageId? } on success or { success: false, error } on failure.
+// Never throws — all errors are caught and returned as structured values.
+// The access token is never logged.
+
+interface SendResult {
+  success    : boolean;
+  messageId ?: string;
+  error     ?: string;
+}
+
+async function sendWhatsAppTextMessage(
+  toPhone : string,
+  body    : string
+): Promise<SendResult> {
+  const accessToken   = process.env.WHATSAPP_ACCESS_TOKEN;
+  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+
+  // Guard: missing env vars
+  if (!accessToken || !phoneNumberId) {
+    console.warn(
+      "[WhatsApp Webhook] ⚠️  WhatsApp send skipped — missing env vars:",
+      {
+        WHATSAPP_ACCESS_TOKEN    : accessToken   ? "set" : "MISSING",
+        WHATSAPP_PHONE_NUMBER_ID : phoneNumberId ? "set" : "MISSING",
+      }
+    );
+    return { success: false, error: "missing_whatsapp_env" };
+  }
+
+  const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`;
+
+  console.log("[WhatsApp Webhook] 📤 WhatsApp send started:", { toPhone });
+
+  try {
+    const res = await fetch(url, {
+      method  : "POST",
+      headers : {
+        "Authorization" : `Bearer ${accessToken}`,   // token never appears in logs
+        "Content-Type"  : "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product : "whatsapp",
+        to                : toPhone,
+        type              : "text",
+        text              : {
+          preview_url : false,
+          body,
+        },
+      }),
+    });
+
+    // Parse response body regardless of status so we can log it on failure
+    let responseJson: Record<string, unknown> = {};
+    try {
+      responseJson = await res.json();
+    } catch {
+      // non-JSON body — leave responseJson empty
+    }
+
+    if (!res.ok) {
+      console.error("[WhatsApp Webhook] ❌ WhatsApp send failed:", {
+        toPhone,
+        httpStatus   : res.status,
+        responseBody : responseJson,
+      });
+      return {
+        success : false,
+        error   : `http_${res.status}`,
+      };
+    }
+
+    // Success — extract wamid from messages[0].id
+    const messages = responseJson?.messages as Array<{ id?: string }> | undefined;
+    const messageId = messages?.[0]?.id ?? undefined;
+
+    console.log("[WhatsApp Webhook] ✅ WhatsApp send success:", { toPhone, messageId });
+    return { success: true, messageId };
+
+  } catch (err: unknown) {
+    const e = err as Record<string, unknown>;
+    console.error("[WhatsApp Webhook] ❌ WhatsApp send failed (network/fetch error):", {
+      toPhone,
+      message : e?.message ?? String(err),
+    });
+    return {
+      success : false,
+      error   : e?.message ? String(e.message) : "fetch_error",
+    };
   }
 }
