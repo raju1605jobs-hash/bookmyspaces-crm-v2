@@ -368,10 +368,158 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
       console.log("[WhatsApp Webhook] STEP F — skipped (no leadId)");
     }
 
+    // ── STEP G-PRE: Capacity pre-qualification check ──────────────────────────
+    // Runs BEFORE Anthropic — zero AI cost for clearly out-of-range enquiries.
+    //
+    // Business rules:
+    //   Standard capacity : up to  70 guests
+    //   Hall arrangement  : up to 120 guests  ← absolute maximum
+    //   Filter threshold  : > 120 guests only
+    //   71–120 guests     : continue to normal AI flow (hall option may apply)
+    //
+    // Status column: lead.status is NOT changed — only notes are updated.
+    // Using status = "out_of_capacity" is avoided because it may not be in
+    // the live DB CHECK constraint.
+
+    const STANDARD_CAPACITY = 70;
+    const MAX_HALL_CAPACITY  = 120;   // absolute maximum with hall arrangement
+
+    const detectedGuests = extractGuestCount(messageText);
+
+    console.log("[WhatsApp Webhook] STEP G-PRE — capacity check:", {
+      detected_guest_count     : detectedGuests,
+      capacity_filter_triggered: detectedGuests !== null && detectedGuests > MAX_HALL_CAPACITY,
+      anthropic_skipped        : detectedGuests !== null && detectedGuests > MAX_HALL_CAPACITY,
+    });
+
+    if (detectedGuests !== null && detectedGuests > MAX_HALL_CAPACITY) {
+      console.log(
+        "[WhatsApp Webhook] STEP G-PRE ⚠️  Guest count", detectedGuests,
+        "> max hall capacity", MAX_HALL_CAPACITY, "— sending static capacity notice, skipping Anthropic"
+      );
+
+      // Exact reply text as specified by business
+      const capacityReply =
+        `Thank you for reaching out to BookMySpaces. ` +
+        `Our standard venue capacity is up to *${STANDARD_CAPACITY} guests*, ` +
+        `and with the hall arrangement we can accommodate up to *${MAX_HALL_CAPACITY} guests* maximum.\n\n` +
+        `For this guest count, we may not be the right fit. ` +
+        `If you are planning a gathering within ${MAX_HALL_CAPACITY} guests, ` +
+        `such as a birthday, anniversary, corporate meeting, private dinner, or intimate celebration, ` +
+        `we would be happy to help you with suitable options.`;
+
+      // ── Update lead notes only — do NOT change lead.status ────────────────
+      if (leadId) {
+        // Fetch current notes safely (existingLead is scoped to found-branch only)
+        const { data: currentLead } = await db
+          .from("leads")
+          .select("notes")
+          .eq("id", leadId)
+          .single();
+
+        const updatedNotes =
+          `${currentLead?.notes ? currentLead.notes + "\n\n" : ""}` +
+          `[Auto ${new Date().toISOString()}] Capacity filter triggered.\n` +
+          `Requested guests: ${detectedGuests}\n` +
+          `Standard capacity: ${STANDARD_CAPACITY}\n` +
+          `Hall max capacity: ${MAX_HALL_CAPACITY}\n` +
+          `Reason: capacity_mismatch`;
+
+        const { error: notesErr } = await db
+          .from("leads")
+          .update({ notes: updatedNotes })
+          .eq("id", leadId);
+
+        if (notesErr) logDbErr("STEP G-PRE lead notes update", notesErr);
+        else console.log("[WhatsApp Webhook] STEP G-PRE — lead notes updated with capacity mismatch");
+      }
+
+      // ── Save static reply as assistant message in conversation ────────────
+      if (convId) {
+        const { data: oocConv } = await db
+          .from("conversations")
+          .select("messages")
+          .eq("id", convId)
+          .single();
+
+        const oocMessages: ConvMessage[] = Array.isArray(oocConv?.messages)
+          ? (oocConv!.messages as ConvMessage[])
+          : [];
+
+        const capacityEntry: ConvMessage = {
+          role      : "assistant",
+          content   : capacityReply,
+          timestamp : new Date().toISOString(),
+          meta      : {
+            generated_for        : "whatsapp",
+            sent_to_whatsapp     : false,        // updated after send below
+            pre_qualification    : true,
+            rejection_reason     : "guest_count_exceeds_max_hall_capacity",
+            detected_guest_count : detectedGuests,
+            standard_capacity    : STANDARD_CAPACITY,
+            max_hall_capacity    : MAX_HALL_CAPACITY,
+          },
+        };
+
+        await db
+          .from("conversations")
+          .update({
+            messages   : [...oocMessages, capacityEntry],
+            updated_at : new Date().toISOString(),
+          })
+          .eq("id", convId);
+      }
+
+      // ── Send static reply via existing Meta helper — no Anthropic call ────
+      const oocSend = await sendWhatsAppTextMessage(senderPhone, capacityReply);
+      console.log("[WhatsApp Webhook] STEP G-PRE — capacity notice send result:", {
+        success   : oocSend.success,
+        messageId : oocSend.messageId ?? null,
+        error     : oocSend.error     ?? null,
+      });
+
+      // ── Patch conversation meta with actual send status ───────────────────
+      if (convId) {
+        const { data: afterSendConv } = await db
+          .from("conversations")
+          .select("messages")
+          .eq("id", convId)
+          .single();
+
+        const afterMsgs: ConvMessage[] = Array.isArray(afterSendConv?.messages)
+          ? (afterSendConv!.messages as ConvMessage[])
+          : [];
+
+        const patched = afterMsgs.map((m, idx) => {
+          if (idx !== afterMsgs.length - 1 || m.role !== "assistant") return m;
+          return {
+            ...m,
+            meta: {
+              ...m.meta,
+              sent_to_whatsapp    : oocSend.success,
+              whatsapp_sent_at    : oocSend.success ? new Date().toISOString() : undefined,
+              whatsapp_message_id : oocSend.messageId ?? null,
+              whatsapp_send_error : oocSend.success ? undefined : oocSend.error,
+            },
+          };
+        });
+
+        await db
+          .from("conversations")
+          .update({ messages: patched, updated_at: new Date().toISOString() })
+          .eq("id", convId);
+
+        console.log("[WhatsApp Webhook] STEP G-PRE — conversation meta patched with send status");
+      }
+
+      console.log("[WhatsApp Webhook] STEP G-PRE — pipeline exited early. anthropic_skipped: true");
+      return;   // ← Anthropic is never called
+    }
+
     // ── STEP G: Generate AI reply ─────────────────────────────────────────────
-    // Only requires messageText (already validated non-empty in POST handler).
-    // convId may be null if both conversation lookup and create failed —
-    // in that case we generate the reply but skip saving it.
+    // Reaches here when:
+    //   a) no guest count detected in message, OR
+    //   b) detected guest count is 120 or below (hall arrangement may apply)
     console.log("[WhatsApp Webhook] STEP G — AI generation started for:", senderPhone);
 
     const aiReply = await generateAIReply({
@@ -746,4 +894,78 @@ async function sendWhatsAppTextMessage(
       error   : e?.message ? String(e.message) : "fetch_error",
     };
   }
+}
+
+// ─── Guest count extractor ────────────────────────────────────────────────────
+// Returns the highest guest count found in the message, or null if none detected.
+// Runs entirely locally — zero API cost, zero latency overhead.
+//
+// Supports:
+//   English  : "200 guests", "150 people", "300 pax", "for 500", "party of 80"
+//   Hindi    : "200 log", "150 vyakti", "200 logo"
+//   Bengali  : "200 jon", "200 jono", "200 manush", "200 জন", "200 মানুষ"
+//   Bengali numerals: ১২১ ১৫০ ২০০ ৩০০ (converted to Arabic before parsing)
+
+function extractGuestCount(text: string): number | null {
+
+  // ── Step 1: Normalise Bengali/Devanagari numerals to ASCII digits ─────────
+  const BENGALI_DIGITS: Record<string, string> = {
+    "০": "0", "১": "1", "২": "2", "৩": "3", "৪": "4",
+    "৫": "5", "৬": "6", "৭": "7", "৮": "8", "৯": "9",
+  };
+  const DEVANAGARI_DIGITS: Record<string, string> = {
+    "०": "0", "१": "1", "२": "2", "३": "3", "४": "4",
+    "५": "5", "६": "6", "७": "7", "८": "8", "९": "9",
+  };
+
+  let normalised = text;
+  for (const [native, ascii] of Object.entries(BENGALI_DIGITS)) {
+    normalised = normalised.split(native).join(ascii);
+  }
+  for (const [native, ascii] of Object.entries(DEVANAGARI_DIGITS)) {
+    normalised = normalised.split(native).join(ascii);
+  }
+
+  // ── Step 2: Match patterns in order of specificity ────────────────────────
+  const patterns: RegExp[] = [
+    // English — number directly before/after guest words
+    /(\d[\d,]*)\s*(?:guests?|peoples?|persons?|pax|heads?|attendees?|members?)\b/i,
+    // English — "for / of / around / about N guests"
+    /(?:for|of|around|approx\.?|approximately|about)\s+(\d[\d,]*)\s*(?:guests?|peoples?|persons?|pax\b)?/i,
+    // English — "gathering/party/event/function of N"
+    /(?:gathering|party|event|function|wedding|reception|ceremony|celebration)\s+of\s+(\d[\d,]*)/i,
+    // English — "N+ guests" or "N-100 guests"
+    /(\d[\d,]*)\s*(?:\+|-)\s*(?:guests?|peoples?|pax)/i,
+    // Hindi — "N log / vyakti / logo / jan"
+    /(\d[\d,]*)\s*(?:log\b|logo\b|vyakti\b|jan\b|jano\b)/i,
+    // Bengali words (romanised) — "N jon / jono / manush"
+    /(\d[\d,]*)\s*(?:jon\b|jono\b|manush\b)/i,
+    // Bengali script words — "N জন / মানুষ"
+    /(\d[\d,]*)\s*(?:জন|মানুষ|লোক)/,
+    // Hindi script words — "N लोग / व्यक्ति / जन"
+    /(\d[\d,]*)\s*(?:लोग|व्यक्ति|जन)/,
+    // Fallback — bare number that looks like a realistic guest count (> 1, likely event-sized)
+    // Only match if something event-related appears nearby in the message
+    /\b(\d{2,4})\b/,
+  ];
+
+  let highest: number | null = null;
+
+  for (const pattern of patterns) {
+    // Use matchAll to catch all occurrences in the message
+    const matches = Array.from(normalised.matchAll(new RegExp(pattern.source, pattern.flags.replace("g","") + "g")));
+    for (const match of matches) {
+      const raw = match[1]?.replace(/,/g, "") ?? "";
+      const num = parseInt(raw, 10);
+      // Ignore noise: must be > 1 and realistic for an event (≤ 9999)
+      if (!isNaN(num) && num > 1 && num <= 9999) {
+        if (highest === null || num > highest) highest = num;
+      }
+    }
+    // Stop at the first pattern that finds something — avoids the bare-number
+    // fallback swallowing unrelated numbers unless nothing else matched
+    if (highest !== null && pattern !== patterns[patterns.length - 1]) break;
+  }
+
+  return highest;
 }
