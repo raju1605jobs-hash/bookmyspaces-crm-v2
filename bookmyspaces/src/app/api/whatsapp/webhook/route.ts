@@ -173,6 +173,8 @@ function logDbErr(label: string, err: {
   });
 }
 
+import { scoreLead } from "@/lib/lead-scorer";
+
 // ─── Full pipeline: C → D → E → F → G → H ───────────────────────────────────
 async function runPipeline(msg: InboundMessage): Promise<void> {
   const { senderPhone, senderName, messageText, messageId, messageTimestamp, messageType } = msg;
@@ -187,7 +189,7 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
 
     const { data: existingLead, error: leadLookupErr } = await db
       .from("leads")
-      .select("id, name, phone, status, notes")
+      .select("id, name, phone, status, notes, event_type, event_date, guest_count, budget, source, tags")
       .eq("phone", senderPhone)
       .maybeSingle();
 
@@ -245,6 +247,67 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
     }
 
     console.log("[WhatsApp Webhook] STEP C — lead upsert completed. leadId:", leadId);
+
+    // ── STEP C-SCORE: Score the lead ──────────────────────────────────────────
+    // Runs after every lead upsert — updates score, temperature, urgency,
+    // estimated revenue, and tags. Zero external API calls.
+    if (leadId) {
+      try {
+        // Build scoring input from whatever we know at this point.
+        // For a new lead we only have phone + source. For returning leads
+        // we use the full existing record.
+        const scoreInput = existingLead
+          ? {
+              name         : existingLead.name,
+              phone        : existingLead.phone,
+              event_type   : existingLead.event_type,
+              event_date   : existingLead.event_date
+                              ? String(existingLead.event_date)
+                              : null,
+              guest_count  : existingLead.guest_count,
+              budget       : existingLead.budget,
+              source       : existingLead.source,
+              existing_tags: Array.isArray(existingLead.tags)
+                              ? (existingLead.tags as string[])
+                              : [],
+            }
+          : {
+              phone        : senderPhone,
+              source       : "whatsapp",
+              existing_tags: [],
+            };
+
+        const scored = scoreLead(scoreInput);
+
+        const { error: scoreErr } = await db
+          .from("leads")
+          .update({
+            ai_score          : scored.ai_score,
+            lead_temperature  : scored.lead_temperature,
+            urgency_level     : scored.urgency_level,
+            estimated_revenue : scored.estimated_revenue,
+            tags              : scored.tags,
+            score_breakdown   : scored.score_breakdown,
+            scored_at         : scored.scored_at,
+          })
+          .eq("id", leadId);
+
+        if (scoreErr) {
+          logDbErr("STEP C-SCORE lead score update", scoreErr);
+        } else {
+          console.log("[WhatsApp Webhook] STEP C-SCORE — lead scored:", {
+            ai_score         : scored.ai_score,
+            lead_temperature : scored.lead_temperature,
+            urgency_level    : scored.urgency_level,
+            estimated_revenue: scored.estimated_revenue,
+            tags             : scored.tags,
+          });
+        }
+      } catch (scoreErr) {
+        // Scoring failure is non-fatal — pipeline continues
+        console.error("[WhatsApp Webhook] STEP C-SCORE — scoring error (non-fatal):", scoreErr);
+      }
+    }
 
     // ── STEP D: Conversation lookup ───────────────────────────────────────────
     console.log("[WhatsApp Webhook] STEP D — conversation lookup started. sessionId:", sessionId);
