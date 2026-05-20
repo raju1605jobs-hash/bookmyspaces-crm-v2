@@ -3,594 +3,500 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   MessageSquare,
-  Send,
-  Users,
-  Zap,
-  RefreshCw,
+  Search,
   Phone,
-  CheckCircle,
-  AlertCircle,
-  Megaphone,
+  User,
   Clock,
-  ChevronDown,
+  CheckCheck,
+  RefreshCw,
+  Send,
+  Loader2,
+  Filter,
+  ChevronRight,
+  Bot,
+  Flame,
+  Thermometer,
+  Snowflake,
+  XCircle,
 } from 'lucide-react'
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: string
+  meta?: {
+    sent_to_whatsapp?: boolean
+    whatsapp_message_id?: string
+    generated_for?: string
+    pre_qualification?: boolean
+    rejection_reason?: string
+  }
+}
 
 interface Conversation {
   id: string
   session_id: string
+  phone: string | null
+  name: string | null
+  status: string
   channel: string
-  messages: Array<{ role: string; content: string; timestamp: string }>
-  is_escalated: boolean
+  messages: ConversationMessage[]
+  is_active: boolean
+  created_at: string
   updated_at: string
-  extracted_name: string | null
-  extracted_phone: string | null
-  leads: { name: string | null; phone: string | null; status: string } | null
+  lead?: {
+    id: string
+    lead_temperature?: string
+    ai_score?: number
+    status?: string
+    event_type?: string
+    guest_count?: number
+  }
 }
 
-const QUICK_TEMPLATES = [
-  { id: 'greeting', label: '👋 Greeting', desc: 'Welcome message with menu' },
-  { id: 'packages', label: '🎉 Packages', desc: 'All rooftop packages with pricing' },
-  { id: 'followup', label: '📲 Follow-up', desc: 'Gentle check-in message' },
-  { id: 'payment', label: '💳 Payment', desc: 'UPI payment details' },
-  { id: 'trust', label: '✅ Trust', desc: 'Genuine business verification' },
-  { id: 'urgency', label: '⚠️ Urgency', desc: 'Weekend slots filling fast' },
-  { id: 'rooftop', label: '🌆 Rooftop', desc: 'Rooftop venue details' },
-  { id: 'dining', label: '🍽️ Dining', desc: 'Private dining info' },
-  { id: 'skyline', label: '🏨 Skyline', desc: 'Room stay details' },
-  { id: 'cafe', label: '☕ Café', desc: 'Café experience' },
-]
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diff / 60_000)
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+function formatMessageTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-IN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
+function TemperatureBadge({ temp }: { temp?: string }) {
+  if (!temp) return null
+  const cfg = {
+    HOT: { icon: Flame, color: 'text-red-600 bg-red-50', label: 'HOT' },
+    WARM: { icon: Thermometer, color: 'text-orange-600 bg-orange-50', label: 'WARM' },
+    COLD: { icon: Snowflake, color: 'text-blue-600 bg-blue-50', label: 'COLD' },
+  }[temp]
+  if (!cfg) return null
+  const Icon = cfg.icon
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium ${cfg.color}`}>
+      <Icon className="w-3 h-3" />
+      {cfg.label}
+    </span>
+  )
+}
+
+// ─── Conversation List Item ───────────────────────────────────────────────────
+
+function ConvListItem({
+  conv,
+  selected,
+  onSelect,
+}: {
+  conv: Conversation
+  selected: boolean
+  onSelect: () => void
+}) {
+  const lastMsg = conv.messages?.[conv.messages.length - 1]
+  const unread = conv.messages?.filter(
+    (m) => m.role === 'assistant' && !m.meta?.sent_to_whatsapp
+  ).length ?? 0
+
+  return (
+    <button
+      onClick={onSelect}
+      className={`w-full text-left px-4 py-3.5 border-b border-gray-100 hover:bg-gray-50 transition-colors ${
+        selected ? 'bg-blue-50 border-l-2 border-l-blue-600' : ''
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center flex-shrink-0">
+          <span className="text-white text-sm font-semibold">
+            {(conv.name ?? conv.phone ?? '?').charAt(0).toUpperCase()}
+          </span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-0.5">
+            <p className="text-sm font-medium text-gray-900 truncate">
+              {conv.name ?? conv.phone ?? 'Unknown'}
+            </p>
+            <span className="text-xs text-gray-400 flex-shrink-0 ml-2">
+              {timeAgo(conv.updated_at)}
+            </span>
+          </div>
+          {conv.lead && (
+            <div className="mb-1">
+              <TemperatureBadge temp={conv.lead.lead_temperature} />
+            </div>
+          )}
+          {lastMsg && (
+            <p className="text-xs text-gray-500 truncate">
+              {lastMsg.role === 'assistant' && <Bot className="w-3 h-3 inline mr-1 text-blue-400" />}
+              {lastMsg.content}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+          {unread > 0 && (
+            <span className="w-5 h-5 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center">
+              {unread}
+            </span>
+          )}
+          <ChevronRight className="w-4 h-4 text-gray-300" />
+        </div>
+      </div>
+    </button>
+  )
+}
+
+// ─── Message Bubble ───────────────────────────────────────────────────────────
+
+function MessageBubble({ msg }: { msg: ConversationMessage }) {
+  const isUser = msg.role === 'user'
+  const isPreQual = msg.meta?.pre_qualification === true
+
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-2`}>
+      {!isUser && (
+        <div className="w-7 h-7 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0 mr-2 mt-1">
+          <Bot className="w-4 h-4 text-blue-600" />
+        </div>
+      )}
+      <div
+        className={`max-w-[75%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
+          isUser
+            ? 'bg-green-100 text-gray-800 rounded-br-sm'
+            : isPreQual
+            ? 'bg-amber-50 text-amber-900 border border-amber-200 rounded-bl-sm'
+            : 'bg-white text-gray-800 border border-gray-100 shadow-sm rounded-bl-sm'
+        }`}
+      >
+        {isPreQual && (
+          <p className="text-xs font-medium text-amber-600 mb-1">Capacity Notice</p>
+        )}
+        <p className="whitespace-pre-wrap">{msg.content}</p>
+        <div className="flex items-center justify-end gap-1 mt-1.5">
+          <span className="text-xs text-gray-400">{formatMessageTime(msg.timestamp)}</span>
+          {!isUser && msg.meta?.sent_to_whatsapp === true && (
+            <CheckCheck className="w-3 h-3 text-blue-500" />
+          )}
+                   {!isUser && msg.meta?.sent_to_whatsapp === false && (
+            <div title="Not yet sent to WhatsApp">
+              <Clock className="w-3 h-3 text-gray-300" />
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function WhatsAppPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
-  const [selectedConv, setSelectedConv] = useState<Conversation | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
-  const [sendPhone, setSendPhone] = useState('')
-  const [sendMessage, setSendMessage] = useState('')
-  const [isSending, setIsSending] = useState(false)
-  const [sendResult, setSendResult] = useState<string | null>(null)
-  const [activeCampaignType, setActiveCampaignType] = useState('followup')
-  const [campaignSegment, setCampaignSegment] = useState('new_inquiry')
-  const [isDryRun, setIsDryRun] = useState(true)
-  const [campaignResult, setCampaignResult] = useState<any>(null)
-  const [isCampaigning, setIsCampaigning] = useState(false)
-  const [selectedTemplate, setSelectedTemplate] = useState('')
+  const [selected, setSelected] = useState<Conversation | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<'all' | 'hot' | 'active' | 'unread'>('all')
+  const [replyText, setReplyText] = useState('')
+  const [sending, setSending] = useState(false)
 
   const fetchConversations = useCallback(async () => {
-    setIsLoading(true)
+    setLoading(true)
     try {
-      const res = await fetch('/api/conversations?channel=whatsapp&limit=50')
+      const res = await fetch('/api/conversations')
       const data = await res.json()
-      setConversations(data.conversations || [])
+      const list: Conversation[] = Array.isArray(data) ? data : data.conversations ?? []
+      setConversations(list)
+      // Update selected if it is open
+      if (selected) {
+        const updated = list.find((c) => c.id === selected.id)
+        if (updated) setSelected(updated)
+      }
     } catch {
-      // Silent failure — UI shows empty state
+      setConversations([])
     } finally {
-      setIsLoading(false)
+      setLoading(false)
     }
-  }, [])
+  }, [selected])
 
   useEffect(() => {
     fetchConversations()
+    const interval = setInterval(fetchConversations, 30_000)
+    return () => clearInterval(interval)
   }, [fetchConversations])
 
-  const sendManualMessage = async () => {
-    if (!sendPhone.trim() || (!sendMessage.trim() && !selectedTemplate)) return
-    setIsSending(true)
-    setSendResult(null)
-
+  async function handleSendReply() {
+    if (!replyText.trim() || !selected?.phone || sending) return
+    setSending(true)
     try {
-      const res = await fetch('/api/whatsapp/send', {
+      await fetch('/api/whatsapp/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          phone: sendPhone,
-          message: sendMessage || undefined,
-          template: selectedTemplate || undefined,
-          type: 'session',
+          to: selected.phone,
+          message: replyText,
+          conversationId: selected.id,
         }),
       })
-      const data = await res.json()
-      if (data.success) {
-        setSendResult('✅ Message sent successfully!')
-        setSendMessage('')
-        setSelectedTemplate('')
-      } else {
-        setSendResult(`❌ Failed: ${data.error || 'Unknown error'}`)
-      }
-    } catch {
-      setSendResult('❌ Network error')
+      setReplyText('')
+      await fetchConversations()
     } finally {
-      setIsSending(false)
+      setSending(false)
     }
   }
 
-  const runCampaign = async () => {
-    setIsCampaigning(true)
-    setCampaignResult(null)
+  // Filtered list
+  const filtered = conversations.filter((c) => {
+    const searchLower = search.toLowerCase()
+    const matchesSearch =
+      !search ||
+      c.name?.toLowerCase().includes(searchLower) ||
+      c.phone?.includes(search) ||
+      c.messages?.some((m) => m.content.toLowerCase().includes(searchLower))
 
-    try {
-      const res = await fetch('/api/whatsapp/campaigns', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: activeCampaignType,
-          segment: campaignSegment,
-          dryRun: isDryRun,
-        }),
-      })
-      const data = await res.json()
-      setCampaignResult(data)
-    } catch {
-      setCampaignResult({ error: 'Network error' })
-    } finally {
-      setIsCampaigning(false)
-    }
-  }
+    const matchesFilter =
+      filter === 'all' ||
+      (filter === 'hot' && c.lead?.lead_temperature === 'HOT') ||
+      (filter === 'active' && c.is_active) ||
+      (filter === 'unread' && c.messages?.some((m) => m.role === 'assistant' && !m.meta?.sent_to_whatsapp))
 
-  const waConvs = conversations.filter(c => c.channel === 'whatsapp')
-  const escalated = waConvs.filter(c => c.is_escalated).length
+    return matchesSearch && matchesFilter
+  })
+
+  const messageList = selected?.messages ?? []
 
   return (
-    <div
-      className="min-h-screen"
-      style={{ background: 'var(--cream)', fontFamily: 'var(--font-body)' }}
-    >
-      {/* Nav */}
-      <nav
-        className="sticky top-0 z-40 px-6 py-4 flex items-center justify-between"
-        style={{
-          background: 'rgba(248,245,240,0.9)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
-        <div
-          className="text-xl font-light"
-          style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}
-        >
-          BookMySpaces{' '}
-          <span className="text-sm" style={{ color: '#25D366' }}>
-            WhatsApp
-          </span>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={fetchConversations}
-            className="p-2 rounded-lg hover:bg-white"
-          >
-            <RefreshCw
-              size={15}
-              style={{ color: 'var(--slate)' }}
-              className={isLoading ? 'animate-spin' : ''}
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* Sidebar */}
+      <div className="w-80 flex-shrink-0 flex flex-col bg-white border-r border-gray-200">
+        {/* Header */}
+        <div className="px-4 py-4 border-b border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-green-600" />
+              <h1 className="text-base font-semibold text-gray-900">WhatsApp</h1>
+              <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                {conversations.length}
+              </span>
+            </div>
+            <button
+              onClick={fetchConversations}
+              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Search */}
+          <div className="relative mb-2">
+            <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search conversations..."
+              className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-          </button>
-          <a
-            href="/dashboard"
-            className="text-sm px-4 py-2 rounded-lg"
-            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}
-          >
-            ← CRM
-          </a>
-        </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="mb-8">
-          <h1
-            className="text-3xl font-light mb-1"
-            style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}
-          >
-            WhatsApp Management
-          </h1>
-          <p className="text-sm" style={{ color: 'var(--muted)' }}>
-            {waConvs.length} conversations · {escalated} escalated
-          </p>
-        </div>
-
-        <div className="grid lg:grid-cols-3 gap-6">
-          {/* LEFT — Conversation List */}
-          <div className="lg:col-span-1">
-            <div
-              className="rounded-2xl overflow-hidden"
-              style={{ background: 'white', border: '1px solid var(--border)' }}
-            >
-              <div
-                className="px-4 py-3 border-b flex items-center gap-2"
-                style={{ borderColor: 'var(--border)' }}
-              >
-                <MessageSquare size={15} style={{ color: '#25D366' }} />
-                <span className="font-medium text-sm" style={{ color: 'var(--charcoal)' }}>
-                  WhatsApp Conversations
-                </span>
-              </div>
-
-              {isLoading ? (
-                <div className="flex justify-center py-8">
-                  <RefreshCw className="animate-spin" size={20} style={{ color: 'var(--gold)' }} />
-                </div>
-              ) : waConvs.length === 0 ? (
-                <div className="py-10 text-center" style={{ color: 'var(--muted)' }}>
-                  <MessageSquare size={32} className="mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No WhatsApp conversations yet</p>
-                  <p className="text-xs mt-1">Messages will appear after webhook is configured</p>
-                </div>
-              ) : (
-                <div className="divide-y" style={{ maxHeight: '500px', overflowY: 'auto' }}>
-                  {waConvs.map(conv => {
-                    const lastMsg = conv.messages?.[conv.messages.length - 1]
-                    const name =
-                      conv.leads?.name ||
-                      conv.extracted_name ||
-                      conv.extracted_phone ||
-                      'Unknown'
-
-                    return (
-                      <div
-                        key={conv.id}
-                        className="px-4 py-3 cursor-pointer hover:bg-amber-50/30 transition-colors"
-                        style={{
-                          background:
-                            selectedConv?.id === conv.id ? 'rgba(201,168,76,0.06)' : undefined,
-                          borderLeft:
-                            conv.is_escalated ? '3px solid #ef4444' : '3px solid transparent',
-                        }}
-                        onClick={() => setSelectedConv(conv)}
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="font-medium text-sm" style={{ color: 'var(--charcoal)' }}>
-                            {name}
-                          </span>
-                          {conv.is_escalated && (
-                            <span className="text-xs text-red-600 bg-red-50 px-1.5 py-0.5 rounded">
-                              Escalated
-                            </span>
-                          )}
-                        </div>
-                        {lastMsg && (
-                          <p
-                            className="text-xs truncate"
-                            style={{ color: 'var(--muted)', maxWidth: '200px' }}
-                          >
-                            {lastMsg.role === 'assistant' ? '🤖 ' : '👤 '}
-                            {lastMsg.content.substring(0, 60)}...
-                          </p>
-                        )}
-                        <p className="text-xs mt-1" style={{ color: 'var(--muted)' }}>
-                          {new Date(conv.updated_at).toLocaleString('en-IN', {
-                            timeZone: 'Asia/Kolkata',
-                            day: 'numeric',
-                            month: 'short',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </p>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
           </div>
 
-          {/* RIGHT — Detail + Tools */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Conversation Detail */}
-            {selectedConv ? (
-              <div
-                className="rounded-2xl overflow-hidden"
-                style={{ background: 'white', border: '1px solid var(--border)' }}
-              >
-                <div
-                  className="px-4 py-3 flex items-center justify-between border-b"
-                  style={{ borderColor: 'var(--border)' }}
-                >
-                  <div>
-                    <span className="font-medium text-sm" style={{ color: 'var(--charcoal)' }}>
-                      {selectedConv.leads?.name || selectedConv.extracted_name || 'Unknown'}
-                    </span>
-                    {selectedConv.extracted_phone && (
-                      <span className="text-xs ml-2" style={{ color: 'var(--muted)' }}>
-                        {selectedConv.extracted_phone}
-                      </span>
-                    )}
-                  </div>
-                  {selectedConv.extracted_phone && (
-                    <a
-                      href={`https://wa.me/91${selectedConv.extracted_phone}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs px-3 py-1.5 rounded-lg text-white flex items-center gap-1"
-                      style={{ background: '#25D366' }}
-                    >
-                      <Phone size={11} /> Open Chat
-                    </a>
-                  )}
-                </div>
-
-                <div
-                  className="p-4 space-y-3 overflow-y-auto"
-                  style={{ maxHeight: '350px' }}
-                >
-                  {selectedConv.messages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
-                      <div
-                        className="max-w-[75%] px-3 py-2 rounded-xl text-sm"
-                        style={{
-                          background:
-                            msg.role === 'user' ? '#dcf8c6' : '#f0f0f0',
-                          color: 'var(--charcoal)',
-                          whiteSpace: 'pre-line',
-                        }}
-                      >
-                        {msg.content}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
-              <div
-                className="rounded-2xl p-8 text-center"
-                style={{ background: 'white', border: '1px solid var(--border)', color: 'var(--muted)' }}
-              >
-                <MessageSquare size={32} className="mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Select a conversation to view messages</p>
-              </div>
-            )}
-
-            {/* Manual Send */}
-            <div
-              className="rounded-2xl p-6"
-              style={{ background: 'white', border: '1px solid var(--border)' }}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <Send size={16} style={{ color: '#25D366' }} />
-                <h3 className="font-medium" style={{ color: 'var(--charcoal)' }}>
-                  Send WhatsApp Message
-                </h3>
-              </div>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                    Phone Number (without +91)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="9051459463"
-                    value={sendPhone}
-                    onChange={e => setSendPhone(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)' }}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                    Quick Templates
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {QUICK_TEMPLATES.map(t => (
-                      <button
-                        key={t.id}
-                        onClick={() => setSelectedTemplate(t.id === selectedTemplate ? '' : t.id)}
-                        className="text-xs px-3 py-1.5 rounded-lg transition-all"
-                        style={{
-                          background: selectedTemplate === t.id ? 'rgba(201,168,76,0.1)' : 'var(--cream)',
-                          border: `1px solid ${selectedTemplate === t.id ? 'var(--gold)' : 'var(--border)'}`,
-                          color: selectedTemplate === t.id ? 'var(--gold-dark)' : 'var(--slate)',
-                        }}
-                        title={t.desc}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                    Custom Message (or leave blank to use template)
-                  </label>
-                  <textarea
-                    value={sendMessage}
-                    onChange={e => setSendMessage(e.target.value)}
-                    placeholder="Type a custom message..."
-                    rows={3}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
-                    style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)' }}
-                  />
-                </div>
-
-                <button
-                  onClick={sendManualMessage}
-                  disabled={isSending || !sendPhone.trim()}
-                  className="px-5 py-2.5 rounded-lg text-white text-sm font-medium flex items-center gap-2 disabled:opacity-50"
-                  style={{ background: '#25D366' }}
-                >
-                  {isSending ? <RefreshCw size={14} className="animate-spin" /> : <Send size={14} />}
-                  Send WhatsApp
-                </button>
-
-                {sendResult && (
-                  <div
-                    className={`text-sm px-3 py-2 rounded-lg ${
-                      sendResult.startsWith('✅') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-                    }`}
-                  >
-                    {sendResult}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Campaigns */}
-            <div
-              className="rounded-2xl p-6"
-              style={{ background: 'white', border: '1px solid var(--border)' }}
-            >
-              <div className="flex items-center gap-2 mb-4">
-                <Megaphone size={16} style={{ color: 'var(--gold)' }} />
-                <h3 className="font-medium" style={{ color: 'var(--charcoal)' }}>
-                  WhatsApp Campaigns
-                </h3>
-                <span
-                  className="text-xs px-2 py-0.5 rounded-full ml-auto"
-                  style={{ background: '#fff3cd', color: '#856404' }}
-                >
-                  Requires approved templates
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                    Campaign Type
-                  </label>
-                  <select
-                    value={activeCampaignType}
-                    onChange={e => setActiveCampaignType(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ border: '1px solid var(--border)', background: 'white' }}
-                  >
-                    <option value="followup">Follow-up (not contacted 48h)</option>
-                    <option value="festival">Festival / Seasonal Promo</option>
-                    <option value="reengagement">Re-engage Cold Leads</option>
-                    <option value="review_request">Post-Event Review Request</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>
-                    Target Segment
-                  </label>
-                  <select
-                    value={campaignSegment}
-                    onChange={e => setCampaignSegment(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ border: '1px solid var(--border)', background: 'white' }}
-                  >
-                    <option value="all">All Leads</option>
-                    <option value="new_inquiry">New Inquiries</option>
-                    <option value="followup_pending">Follow-up Pending</option>
-                    <option value="future_prospect">Future Prospects</option>
-                    <option value="confirmed">Confirmed (for reviews)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-4 mb-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={isDryRun}
-                    onChange={e => setIsDryRun(e.target.checked)}
-                    className="w-4 h-4 rounded"
-                  />
-                  <span className="text-sm" style={{ color: 'var(--slate)' }}>
-                    Dry Run (count only, don't send)
-                  </span>
-                </label>
-              </div>
-
+          {/* Filters */}
+          <div className="flex gap-1">
+            {(['all', 'hot', 'active', 'unread'] as const).map((f) => (
               <button
-                onClick={runCampaign}
-                disabled={isCampaigning}
-                className={`px-5 py-2.5 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50 ${
-                  isDryRun ? '' : 'text-white'
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`flex-1 py-1 text-xs font-medium rounded-lg capitalize transition-colors ${
+                  filter === f
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
-                style={{
-                  background: isDryRun
-                    ? 'var(--cream)'
-                    : 'linear-gradient(135deg, #c9a84c, #a07a28)',
-                  border: isDryRun ? '1px solid var(--border)' : 'none',
-                  color: isDryRun ? 'var(--charcoal)' : undefined,
-                }}
               >
-                {isCampaigning ? (
-                  <RefreshCw size={14} className="animate-spin" />
-                ) : isDryRun ? (
-                  <Users size={14} />
-                ) : (
-                  <Megaphone size={14} />
-                )}
-                {isDryRun ? 'Preview Recipients' : '🚀 Send Campaign'}
+                {f}
               </button>
-
-              {campaignResult && (
-                <div
-                  className="mt-3 p-3 rounded-lg text-sm"
-                  style={{
-                    background: campaignResult.error ? '#fef2f2' : '#f0fdf4',
-                    color: campaignResult.error ? '#dc2626' : '#16a34a',
-                  }}
-                >
-                  {campaignResult.error ? (
-                    `❌ ${campaignResult.error}`
-                  ) : campaignResult.dryRun ? (
-                    <>
-                      <p className="font-medium">📊 Preview: {campaignResult.count} eligible recipients</p>
-                      {campaignResult.sample?.length > 0 && (
-                        <div className="mt-2 space-y-1">
-                          {campaignResult.sample.map((r: any, i: number) => (
-                            <p key={i} className="text-xs opacity-80">
-                              • {r.name || 'Unknown'} — {r.phone}
-                            </p>
-                          ))}
-                          {campaignResult.count > campaignResult.sample.length && (
-                            <p className="text-xs opacity-60">
-                              ...and {campaignResult.count - campaignResult.sample.length} more
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    `✅ Campaign complete: ${campaignResult.sent} sent, ${campaignResult.failed} failed`
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Setup Instructions */}
-            <div
-              className="rounded-2xl p-6"
-              style={{
-                background: 'rgba(201,168,76,0.05)',
-                border: '1px solid rgba(201,168,76,0.2)',
-              }}
-            >
-              <h3 className="font-medium mb-3 flex items-center gap-2" style={{ color: 'var(--charcoal)' }}>
-                <Zap size={16} style={{ color: 'var(--gold)' }} />
-                Webhook Setup (Do Once)
-              </h3>
-              <div className="text-sm space-y-2" style={{ color: 'var(--slate)' }}>
-                <p>1. Go to your <strong>Wati.io Dashboard</strong> → Settings → Webhooks</p>
-                <p>2. Set webhook URL to:</p>
-                <code
-                  className="block px-3 py-2 rounded text-xs mt-1"
-                  style={{ background: '#0f1923', color: '#c9a84c' }}
-                >
-                  {typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.vercel.app'}/api/whatsapp/webhook
-                </code>
-                <p className="mt-2">3. Add these env vars:</p>
-                <code
-                  className="block px-3 py-2 rounded text-xs"
-                  style={{ background: '#0f1923', color: '#c9a84c' }}
-                >
-                  WATI_BASE_URL=https://live-server-XXXXX.wati.io{'\n'}
-                  WATI_API_TOKEN=your-token{'\n'}
-                  WATI_VERIFY_TOKEN=any-secret-string{'\n'}
-                  WATI_WEBHOOK_SECRET=optional-hmac-secret
-                </code>
-                <p className="mt-2">4. Redeploy on Vercel — AI auto-replies are now active! 🎉</p>
-              </div>
-            </div>
+            ))}
           </div>
+        </div>
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-center py-12 px-4">
+              <MessageSquare className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+              <p className="text-sm text-gray-500">
+                {search ? 'No conversations match your search.' : 'No conversations yet.'}
+              </p>
+            </div>
+          ) : (
+            filtered.map((c) => (
+              <ConvListItem
+                key={c.id}
+                conv={c}
+                selected={selected?.id === c.id}
+                onSelect={() => setSelected(c)}
+              />
+            ))
+          )}
         </div>
       </div>
+
+      {/* Chat panel */}
+      {selected ? (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Conversation header */}
+          <div className="flex items-center justify-between px-6 py-4 bg-white border-b border-gray-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center">
+                <span className="text-white text-sm font-semibold">
+                  {(selected.name ?? selected.phone ?? '?').charAt(0).toUpperCase()}
+                </span>
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold text-gray-900">
+                    {selected.name ?? 'Unknown'}
+                  </p>
+                  <TemperatureBadge temp={selected.lead?.lead_temperature} />
+                </div>
+                <div className="flex items-center gap-3 text-xs text-gray-400 mt-0.5">
+                  {selected.phone && (
+                    <span className="flex items-center gap-1">
+                      <Phone className="w-3 h-3" />
+                      {selected.phone}
+                    </span>
+                  )}
+                  {selected.lead?.event_type && (
+                    <span className="capitalize">{selected.lead.event_type.toLowerCase()}</span>
+                  )}
+                  {selected.lead?.guest_count && (
+                    <span className="flex items-center gap-1">
+                      <User className="w-3 h-3" />
+                      {selected.lead.guest_count} guests
+                    </span>
+                  )}
+                  {selected.lead?.ai_score !== undefined && (
+                    <span>Score: {selected.lead.ai_score}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
+                  selected.is_active ? 'text-green-700 bg-green-100' : 'text-gray-600 bg-gray-100'
+                }`}
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${selected.is_active ? 'bg-green-500' : 'bg-gray-400'}`} />
+                {selected.is_active ? 'Active' : 'Inactive'}
+              </span>
+              <span className="text-xs text-gray-400">
+                {messageList.length} message{messageList.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-6 py-4 bg-gray-50">
+            {messageList.length === 0 ? (
+              <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+                No messages in this conversation.
+              </div>
+            ) : (
+              messageList.map((msg, idx) => (
+                <MessageBubble key={`${msg.timestamp}-${idx}`} msg={msg} />
+              ))
+            )}
+          </div>
+
+          {/* Reply input */}
+          <div className="px-6 py-4 bg-white border-t border-gray-200">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 relative">
+                <textarea
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault()
+                      handleSendReply()
+                    }
+                  }}
+                  placeholder="Type a manual reply (Enter to send, Shift+Enter for new line)..."
+                  rows={2}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                />
+              </div>
+              <button
+                onClick={handleSendReply}
+                disabled={!replyText.trim() || sending}
+                className="p-3 bg-green-600 text-white rounded-xl hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0 transition-colors"
+                title="Send WhatsApp message"
+              >
+                {sending ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <Send className="w-5 h-5" />
+                )}
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs text-gray-400 flex items-center gap-1">
+              <Filter className="w-3 h-3" />
+              Manual replies bypass AI and send directly via WhatsApp Cloud API.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 text-center px-8">
+          <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mb-4">
+            <MessageSquare className="w-8 h-8 text-green-600" />
+          </div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">WhatsApp Conversations</h2>
+          <p className="text-sm text-gray-500 max-w-xs">
+            Select a conversation from the left to view messages and send manual replies.
+          </p>
+          <div className="mt-6 grid grid-cols-3 gap-3 text-center text-xs text-gray-400">
+            <div className="bg-white rounded-xl p-3 border border-gray-100">
+              <p className="text-lg font-bold text-gray-900">{conversations.length}</p>
+              <p>Total</p>
+            </div>
+            <div className="bg-white rounded-xl p-3 border border-gray-100">
+              <p className="text-lg font-bold text-red-600">
+                {conversations.filter((c) => c.lead?.lead_temperature === 'HOT').length}
+              </p>
+              <p>Hot Leads</p>
+            </div>
+            <div className="bg-white rounded-xl p-3 border border-gray-100">
+              <p className="text-lg font-bold text-green-600">
+                {conversations.filter((c) => c.is_active).length}
+              </p>
+              <p>Active</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Close selected on mobile */}
+      {selected && (
+        <button
+          onClick={() => setSelected(null)}
+          className="fixed top-4 left-4 z-10 md:hidden p-2 bg-white rounded-lg shadow border border-gray-200"
+        >
+          <XCircle className="w-5 h-5 text-gray-600" />
+        </button>
+      )}
     </div>
   )
 }

@@ -174,6 +174,7 @@ function logDbErr(label: string, err: {
 }
 
 import { scoreLead } from "@/lib/lead-scorer";
+import { extractLeadDetails } from "@/lib/extract-lead-details";
 
 // ─── Full pipeline: C → D → E → F → G → H ───────────────────────────────────
 async function runPipeline(msg: InboundMessage): Promise<void> {
@@ -183,13 +184,20 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
     const db        = getSupabaseAdmin();
     const sessionId = `whatsapp_${senderPhone}`;
 
+    // ── STEP C-EXTRACT: Extract structured fields from message text ───────────
+    // Runs first — before any DB write — so extracted values are available
+    // for both the lead upsert and the scorer.
+    // Zero API calls. Falls back to all-null on any error.
+    const extracted = extractLeadDetails(messageText);
+    console.log("[WhatsApp Webhook] STEP C-EXTRACT — extracted fields:", extracted);
+
     // ── STEP C: Lead upsert ───────────────────────────────────────────────────
     console.log("[WhatsApp Webhook] STEP C — lead upsert started for phone:", senderPhone);
     let leadId: string | null = null;
 
     const { data: existingLead, error: leadLookupErr } = await db
       .from("leads")
-      .select("id, name, phone, status, notes, event_type, event_date, guest_count, budget, source, tags")
+      .select("id, name, phone, status, notes, event_type, event_date, guest_count, budget, source, tags, occasion")
       .eq("phone", senderPhone)
       .maybeSingle();
 
@@ -210,7 +218,16 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
         whatsapp_opted_in : true,
         notes             : `${existingLead.notes ? existingLead.notes + "\n\n" : ""}[WhatsApp ${messageTimestamp}]: ${messageText}`,
       };
+
       if (senderName && !existingLead.name) updatePayload.name = senderName;
+
+      // Only overwrite existing structured fields if they were null/empty
+      // AND extraction found something. Never blank out a field that already
+      // has a value set by a previous message or by the admin.
+      if (extracted.event_type  && !existingLead.event_type)  updatePayload.event_type  = extracted.event_type;
+      if (extracted.occasion    && !existingLead.occasion)     updatePayload.occasion    = extracted.occasion;
+      if (extracted.guest_count && !existingLead.guest_count)  updatePayload.guest_count = extracted.guest_count;
+      if (extracted.budget      && !existingLead.budget)       updatePayload.budget      = extracted.budget;
 
       const { error: leadUpdateErr } = await db
         .from("leads")
@@ -221,7 +238,7 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
       else console.log("[WhatsApp Webhook] STEP C — lead updated:", leadId);
 
     } else {
-      // No existing lead — create one
+      // No existing lead — create one with extracted fields populated immediately
       const { data: newLead, error: leadCreateErr } = await db
         .from("leads")
         .insert({
@@ -233,6 +250,11 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
           notes             : `First WhatsApp message: "${messageText}"`,
           last_contacted_at : messageTimestamp,
           whatsapp_opted_in : true,
+          // Structured fields from extraction — null if not detected
+          event_type        : extracted.event_type  ?? null,
+          occasion          : extracted.occasion    ?? null,
+          guest_count       : extracted.guest_count ?? null,
+          budget            : extracted.budget      ?? null,
         })
         .select("id")
         .single();
@@ -248,34 +270,26 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
 
     console.log("[WhatsApp Webhook] STEP C — lead upsert completed. leadId:", leadId);
 
-    // ── STEP C-SCORE: Score the lead ──────────────────────────────────────────
-    // Runs after every lead upsert — updates score, temperature, urgency,
-    // estimated revenue, and tags. Zero external API calls.
+    // ── STEP C-SCORE: Score the lead using extracted + existing DB fields ──────
+    // Merges extracted values with whatever was already in the DB so the scorer
+    // always has the richest possible input.
     if (leadId) {
       try {
-        // Build scoring input from whatever we know at this point.
-        // For a new lead we only have phone + source. For returning leads
-        // we use the full existing record.
-        const scoreInput = existingLead
-          ? {
-              name         : existingLead.name,
-              phone        : existingLead.phone,
-              event_type   : existingLead.event_type,
-              event_date   : existingLead.event_date
-                              ? String(existingLead.event_date)
-                              : null,
-              guest_count  : existingLead.guest_count,
-              budget       : existingLead.budget,
-              source       : existingLead.source,
-              existing_tags: Array.isArray(existingLead.tags)
-                              ? (existingLead.tags as string[])
-                              : [],
-            }
-          : {
-              phone        : senderPhone,
-              source       : "whatsapp",
-              existing_tags: [],
-            };
+        const scoreInput = {
+          name         : existingLead?.name              ?? senderName             ?? null,
+          phone        : senderPhone,
+          // Prefer freshly-extracted value; fall back to what's already in DB
+          event_type   : extracted.event_type            ?? existingLead?.event_type ?? null,
+          event_date   : existingLead?.event_date
+                          ? String(existingLead.event_date)
+                          : null,
+          guest_count  : extracted.guest_count           ?? existingLead?.guest_count ?? null,
+          budget       : extracted.budget                ?? existingLead?.budget      ?? null,
+          source       : existingLead?.source            ?? "whatsapp",
+          existing_tags: Array.isArray(existingLead?.tags)
+                          ? (existingLead!.tags as string[])
+                          : [],
+        };
 
         const scored = scoreLead(scoreInput);
 
