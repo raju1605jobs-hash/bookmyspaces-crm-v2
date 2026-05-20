@@ -336,31 +336,32 @@ function _scoreLeadInternal(input: LeadScoringInput): LeadScoringResult {
   if (guests >= 100)                   autoTags.push("LARGE_EVENT");
 
   // ── Historical HOT / VIP preservation ────────────────────────────────────
-  // Once a lead has been marked HOT or VIP, these statuses are NEVER removed
-  // automatically by re-scoring. They can only be changed by a human operator.
-  // This prevents a lead from being downgraded if they message again with
-  // incomplete info (e.g. a follow-up without event details).
+  // Once a lead has been marked VIP, that status is NEVER removed automatically.
+  // Temperature (HOT/WARM/COLD) IS replaced on every rescore — old temperature
+  // tags are stripped first so a lead can never hold two temperatures at once.
   const existingTags  = input.existing_tags ?? [];
-  const wasHot        = existingTags.includes("HOT");
   const wasVip        = existingTags.includes("VIP");
 
-  if (wasHot && !autoTags.includes("HOT")) {
-    autoTags.push("HOT");
-    reasoning.push("HOT tag preserved from previous scoring (not downgraded)");
-  }
   if (wasVip && !autoTags.includes("VIP")) {
     autoTags.push("VIP");
     reasoning.push("VIP tag preserved from previous scoring (not downgraded)");
   }
 
-  // Remove WARM/COLD temperature tags if HOT is preserved
-  // (a lead can't be both HOT and COLD/WARM)
-  const finalAutoTags = wasHot
-    ? autoTags.filter(t => t !== "WARM" && t !== "COLD")
-    : autoTags;
+  // ── Temperature tag deduplication (THE FIX) ───────────────────────────────
+  // Strip ALL existing temperature tags from existingTags before merging.
+  // This guarantees the final array holds exactly ONE temperature tag —
+  // the one from the current rescore — regardless of what was stored before.
+  //
+  //   OLD: ["COLD", "VIP", "WEDDING"]  →  cleanedExistingTags: ["VIP", "WEDDING"]
+  //   autoTags: ["HOT", "VIP", "WEDDING"]
+  //   finalTags: ["VIP", "WEDDING", "HOT"]   ← no duplicate, no stale COLD
+  const temperatureTags = ["HOT", "WARM", "COLD"];
+  const cleanedExistingTags = existingTags.filter(
+    (tag) => !temperatureTags.includes(tag)
+  );
 
-  // Merge with existing tags, deduplicate, preserve all non-temperature history
-  const mergedTags = Array.from(new Set([...existingTags, ...finalAutoTags]));
+  // Merge: cleaned history + new auto-tags, deduplicated
+  const mergedTags = Array.from(new Set([...cleanedExistingTags, ...autoTags]));
 
   // ── Build final score_breakdown with all required fields ──────────────────
   const scoreBreakdown: ScoreBreakdown = {
