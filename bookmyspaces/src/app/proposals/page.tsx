@@ -1,687 +1,680 @@
 'use client'
 
-import { useState, useEffect, Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useState, useEffect, useCallback } from 'react'
 import {
-  FileText, Sparkles, Eye, Send, ChevronDown, Plus, Trash2,
-  RefreshCw, CheckCircle, AlertCircle, Calculator, Download
+  FileText, Send, Eye, Clock, CheckCircle2, XCircle,
+  AlertTriangle, Flame, RefreshCw, Download, MessageSquare,
+  Mail, Copy, Phone, TrendingUp, Zap, ChevronDown,
+  ChevronUp, BarChart3, Filter, Search, ExternalLink,
 } from 'lucide-react'
+import {
+  computeProposalUrgency,
+  ProposalUrgencyResult,
+  ProposalSnapshot,
+  LeadSnapshot,
+  ProposalNextAction,
+} from '@/lib/proposal-intelligence'
 
-const VENUES = ['Monurama Rooftop', 'Monurama Banquet', 'Monurama Private Dining', 'Skyline Serenity']
-const EVENT_TYPES = ['Birthday Party', 'Anniversary', 'Engagement', 'Corporate Event', 'Private Dinner', 'Get-together', 'Baby Shower', 'Farewell', 'Other']
+// ─── Types ────────────────────────────────────────────────────────────────────
 
-const PACKAGES = [
-  { name: 'Silver', price: 42000, guests: 60, hours: 4 },
-  { name: 'Gold', price: 50000, guests: 60, hours: 4 },
-  { name: 'Platinum', price: 59500, guests: 60, hours: 5 },
-  { name: 'Custom', price: 0, guests: 0, hours: 0 },
-]
+type ProposalStatus = 'draft' | 'generated' | 'sent' | 'viewed' | 'followed_up' | 'accepted' | 'rejected' | 'expired'
+type RiskLevel      = 'low' | 'medium' | 'high' | 'critical'
+type FilterTab      = 'all' | 'action_needed' | 'hot' | 'viewed' | 'sent' | 'accepted'
 
-const ADDON_OPTIONS = [
-  { id: 'photography', label: '📷 Photography', price: 8000 },
-  { id: 'music', label: '🎵 Music Setup', price: 6000 },
-  { id: 'theme_decoration', label: '🎨 Theme Decoration', price: 8500 },
-]
-
-interface Addon { name: string; price: number }
-
-interface ProposalForm {
-  client_name: string
-  client_phone: string
-  client_email: string
-  event_type: string
-  event_date: string
-  event_time: string
-  guest_count: string
-  venue: string
-  package_name: string
-  base_price: string
-  addons: Addon[]
-  discount_amount: string
-  discount_reason: string
-  special_requirements: string
-  lead_id: string
+interface ProposalWithLead {
+  id                  : string
+  proposal_number     : string | null
+  lead_id             : string | null
+  client_name         : string | null
+  client_phone        : string | null
+  event_type          : string | null
+  event_date          : string | null
+  guest_count         : number | null
+  package_name        : string | null
+  total_price         : number | null
+  status              : ProposalStatus
+  urgency_score       : number | null
+  risk_level          : RiskLevel | null
+  next_action         : ProposalNextAction | null
+  escalation_required : boolean | null
+  engagement_score    : number | null
+  viewed_count        : number | null
+  sent_at             : string | null
+  first_viewed_at     : string | null
+  last_viewed_at      : string | null
+  followed_up_at      : string | null
+  created_at          : string
+  updated_at          : string
+  ai_summary          : string | null
+  recommended_package : string | null
+  venue_fit_reasoning : string | null
+  urgency_cta         : string | null
+  confidence_score    : number | null
+  leads               : LeadSnapshotRaw | null
 }
 
-function ProposalBuilderInner() {
-  const searchParams = useSearchParams()
+interface LeadSnapshotRaw {
+  id               : string
+  name             : string | null
+  phone            : string | null
+  ai_score         : number | null
+  lead_temperature : string | null
+  urgency_level    : string | null
+  lead_stage       : string | null
+  estimated_revenue: number | null
+  budget           : string | null
+  event_type       : string | null
+  venue            : string | null
+}
 
-  const [form, setForm] = useState<ProposalForm>({
-    client_name: searchParams.get('name') || '',
-    client_phone: searchParams.get('phone') || '',
-    client_email: '',
-    event_type: searchParams.get('event') || '',
-    event_date: searchParams.get('date') || '',
-    event_time: '',
-    guest_count: searchParams.get('guests') || '',
-    venue: 'Monurama Rooftop',
-    package_name: 'Gold',
-    base_price: '50000',
-    addons: [],
-    discount_amount: '',
-    discount_reason: '',
-    special_requirements: '',
-    lead_id: searchParams.get('lead_id') || '',
-  })
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-  const [isCreating, setIsCreating] = useState(false)
-  const [createdProposal, setCreatedProposal] = useState<any>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [recentProposals, setRecentProposals] = useState<any[]>([])
-  const [isLoadingProposals, setIsLoadingProposals] = useState(true)
+function formatINR(n: number): string {
+  if (n >= 100_000) return `₹${(n / 100_000).toFixed(1)}L`
+  if (n >= 1_000)   return `₹${(n / 1_000).toFixed(0)}K`
+  return `₹${n}`
+}
 
-  useEffect(() => {
-    fetchRecentProposals()
-  }, [])
+function timeAgo(iso: string | null): string {
+  if (!iso) return '—'
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60_000)
+  if (mins < 60)   return `${mins}m ago`
+  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`
+  return `${Math.floor(mins / 1440)}d ago`
+}
 
-  const fetchRecentProposals = async () => {
-    setIsLoadingProposals(true)
-    try {
-      const res = await fetch('/api/proposals')
-      const data = await res.json()
-      setRecentProposals(data.proposals || [])
-    } finally {
-      setIsLoadingProposals(false)
-    }
+function toLeadSnapshot(raw: LeadSnapshotRaw | null): LeadSnapshot {
+  return {
+    id               : raw?.id               ?? '',
+    name             : raw?.name             ?? null,
+    phone            : raw?.phone            ?? null,
+    email            : null,
+    event_type       : raw?.event_type       ?? null,
+    event_date       : null,
+    guest_count      : null,
+    budget           : raw?.budget           ?? null,
+    venue            : raw?.venue            ?? null,
+    ai_score         : raw?.ai_score         ?? null,
+    lead_temperature : raw?.lead_temperature ?? null,
+    urgency_level    : raw?.urgency_level    ?? null,
+    lead_stage       : raw?.lead_stage       ?? null,
+    estimated_revenue: raw?.estimated_revenue?? null,
+    score_breakdown  : null,
   }
+}
 
-  const set = (key: keyof ProposalForm, value: string) =>
-    setForm(prev => ({ ...prev, [key]: value }))
-
-  const selectPackage = (pkg: typeof PACKAGES[0]) => {
-    setForm(prev => ({
-      ...prev,
-      package_name: pkg.name,
-      base_price: pkg.price.toString(),
-    }))
+function toProposalSnapshot(p: ProposalWithLead): ProposalSnapshot {
+  return {
+    id              : p.id,
+    status          : p.status,
+    total_price     : p.total_price,
+    package_name    : p.package_name,
+    guest_count     : p.guest_count,
+    event_type      : p.event_type,
+    sent_at         : p.sent_at,
+    first_viewed_at : p.first_viewed_at,
+    last_viewed_at  : p.last_viewed_at,
+    followed_up_at  : p.followed_up_at,
+    viewed_count    : p.viewed_count ?? 0,
+    engagement_score: p.engagement_score ?? 0,
+    created_at      : p.created_at,
   }
+}
 
-  const toggleAddon = (addon: typeof ADDON_OPTIONS[0]) => {
-    setForm(prev => {
-      const exists = prev.addons.find(a => a.name === addon.label)
-      if (exists) {
-        return { ...prev, addons: prev.addons.filter(a => a.name !== addon.label) }
-      } else {
-        return { ...prev, addons: [...prev.addons, { name: addon.label, price: addon.price }] }
-      }
-    })
-  }
+// ─── Status config ────────────────────────────────────────────────────────────
 
-  const addCustomAddon = () => {
-    setForm(prev => ({
-      ...prev,
-      addons: [...prev.addons, { name: '', price: 0 }],
-    }))
-  }
+const STATUS_CONFIG: Record<ProposalStatus, { label: string; pill: string; icon: React.ElementType }> = {
+  draft       : { label: 'Draft',       pill: 'bg-gray-100 text-gray-600 border border-gray-200',           icon: FileText      },
+  generated   : { label: 'Generated',   pill: 'bg-blue-50 text-blue-700 border border-blue-200',            icon: Zap           },
+  sent        : { label: 'Sent',        pill: 'bg-indigo-50 text-indigo-700 border border-indigo-200',      icon: Send          },
+  viewed      : { label: 'Viewed',      pill: 'bg-amber-50 text-amber-700 border border-amber-200',         icon: Eye           },
+  followed_up : { label: 'Followed Up', pill: 'bg-orange-50 text-orange-700 border border-orange-200',      icon: MessageSquare },
+  accepted    : { label: 'Accepted',    pill: 'bg-emerald-50 text-emerald-700 border border-emerald-200',   icon: CheckCircle2  },
+  rejected    : { label: 'Rejected',    pill: 'bg-red-50 text-red-700 border border-red-200',               icon: XCircle       },
+  expired     : { label: 'Expired',     pill: 'bg-gray-50 text-gray-400 border border-gray-200',            icon: Clock         },
+}
 
-  const updateCustomAddon = (index: number, field: 'name' | 'price', value: string) => {
-    setForm(prev => ({
-      ...prev,
-      addons: prev.addons.map((a, i) =>
-        i === index ? { ...a, [field]: field === 'price' ? parseFloat(value) || 0 : value } : a
-      ),
-    }))
-  }
+const RISK_CONFIG: Record<RiskLevel, { label: string; color: string }> = {
+  low     : { label: 'Low Risk',      color: 'text-emerald-600 bg-emerald-50 border border-emerald-200' },
+  medium  : { label: 'Medium Risk',   color: 'text-amber-600 bg-amber-50 border border-amber-200'       },
+  high    : { label: 'High Risk',     color: 'text-orange-600 bg-orange-50 border border-orange-200'    },
+  critical: { label: 'Critical',      color: 'text-red-700 bg-red-50 border border-red-200'             },
+}
 
-  const removeAddon = (index: number) => {
-    setForm(prev => ({ ...prev, addons: prev.addons.filter((_, i) => i !== index) }))
-  }
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
-  // Live pricing calculation
-  const basePrice = parseFloat(form.base_price) || 0
-  const guestCount = parseInt(form.guest_count) || 0
-  const addonsTotal = form.addons.reduce((s, a) => s + (a.price || 0), 0)
-  const extraGuestCharge = guestCount > 60 ? (guestCount - 60) * 750 : 0
-  const discountAmt = parseFloat(form.discount_amount) || 0
-  const subtotal = basePrice + addonsTotal + extraGuestCharge
-  const total = subtotal - discountAmt
-  const advance = Math.round(total * 0.3)
-
-  const createProposal = async () => {
-    if (!form.client_name || !form.package_name || !basePrice) {
-      setError('Client name, package, and base price are required')
-      return
-    }
-    setIsCreating(true)
-    setError(null)
-
-    try {
-      // Build addons including extra guest charge
-      const allAddons = [...form.addons]
-      if (extraGuestCharge > 0) {
-        allAddons.push({ name: `Extra Guests (${guestCount - 60} × ₹750)`, price: extraGuestCharge })
-      }
-
-      const res = await fetch('/api/proposals', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          guest_count: guestCount || null,
-          base_price: basePrice,
-          addons: allAddons,
-          discount_amount: discountAmt,
-          total_price: total,
-          advance_required: advance,
-          generate_cover_note: true,
-        }),
-      })
-
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to create proposal')
-      setCreatedProposal(data.proposal)
-      fetchRecentProposals()
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setIsCreating(false)
-    }
-  }
-
-  const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
-    draft:    { color: '#6b7280', bg: '#f3f4f6' },
-    sent:     { color: '#2563eb', bg: '#eff6ff' },
-    viewed:   { color: '#7c3aed', bg: '#f5f3ff' },
-    accepted: { color: '#16a34a', bg: '#f0fdf4' },
-    rejected: { color: '#dc2626', bg: '#fef2f2' },
-    expired:  { color: '#9ca3af', bg: '#f9fafb' },
-  }
-
+function StatusPill({ status }: { status: ProposalStatus }) {
+  const cfg  = STATUS_CONFIG[status]
+  const Icon = cfg.icon
   return (
-    <div className="min-h-screen" style={{ background: 'var(--cream)', fontFamily: 'var(--font-body)' }}>
-      {/* Nav */}
-      <nav className="sticky top-0 z-40 px-6 py-4 flex items-center justify-between"
-        style={{ background: 'rgba(248,245,240,0.95)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--border)' }}>
-        <div className="text-xl font-light" style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}>
-          BookMySpaces <span className="text-sm" style={{ color: 'var(--gold)' }}>Proposals</span>
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.pill}`}>
+      <Icon className="w-3 h-3" />
+      {cfg.label}
+    </span>
+  )
+}
+
+function UrgencyBar({ score }: { score: number }) {
+  const color = score >= 75 ? 'bg-red-500' : score >= 50 ? 'bg-amber-500' : score >= 25 ? 'bg-blue-500' : 'bg-gray-200'
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${color}`} style={{ width: `${score}%` }} />
+      </div>
+      <span className="text-xs font-bold text-gray-600 tabular-nums w-6 text-right">{score}</span>
+    </div>
+  )
+}
+
+function EngagementDots({ count }: { count: number }) {
+  const dots = Math.min(count, 5)
+  return (
+    <div className="flex gap-0.5">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <span
+          key={i}
+          className={`w-2 h-2 rounded-full ${i < dots ? 'bg-blue-500' : 'bg-gray-200'}`}
+          title={`${count} view${count !== 1 ? 's' : ''}`}
+        />
+      ))}
+    </div>
+  )
+}
+
+// ─── Intelligence panel ───────────────────────────────────────────────────────
+
+function IntelligencePanel({
+  proposal,
+  urgency,
+  onAction,
+}: {
+  proposal: ProposalWithLead
+  urgency : ProposalUrgencyResult
+  onAction: (action: string, proposalId: string) => void
+}) {
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-gray-50/80 border-b border-gray-100">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-4 h-4 text-blue-600" />
+          <span className="text-sm font-bold text-gray-900">Intelligence</span>
+          {urgency.escalationRequired && (
+            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-600 text-white text-xs font-bold rounded animate-pulse">
+              <AlertTriangle className="w-2.5 h-2.5" /> PRIORITY
+            </span>
+          )}
         </div>
-        <div className="flex gap-2">
-          <a href="/kanban" className="text-sm px-4 py-2 rounded-lg"
-            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}>
-            ← Kanban
-          </a>
-          <a href="/dashboard" className="text-sm px-4 py-2 rounded-lg"
-            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}>
-            ← CRM
-          </a>
+        {urgency.riskLevel && (
+          <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${RISK_CONFIG[urgency.riskLevel].color}`}>
+            {RISK_CONFIG[urgency.riskLevel].label}
+          </span>
+        )}
+      </div>
+
+      <div className="px-4 py-3 space-y-3">
+        {/* Urgency score */}
+        <div>
+          <p className="text-xs text-gray-400 mb-1 font-medium">URGENCY SCORE</p>
+          <UrgencyBar score={urgency.urgencyScore} />
         </div>
-      </nav>
 
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="grid lg:grid-cols-3 gap-8">
-
-          {/* ── BUILDER FORM ── */}
-          <div className="lg:col-span-2 space-y-6">
-            <div>
-              <h1 className="text-3xl font-light" style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}>
-                Proposal Builder
-              </h1>
-              <p className="text-sm mt-1" style={{ color: 'var(--muted)' }}>
-                AI generates the cover note automatically. Fill details and click Create.
-              </p>
-            </div>
-
-            {/* Client Details */}
-            <FormCard title="Client Information">
-              <div className="grid grid-cols-2 gap-4">
-                <Field label="Client Name *" value={form.client_name} onChange={v => set('client_name', v)} placeholder="Rahul Sharma" />
-                <Field label="Phone" value={form.client_phone} onChange={v => set('client_phone', v)} placeholder="9051459463" />
-                <Field label="Email" value={form.client_email} onChange={v => set('client_email', v)} placeholder="rahul@gmail.com" />
-                <Field label="any ID (optional)" value={form.lead_id} onChange={v => set('lead_id', v)} placeholder="auto-links CRM record" />
-              </div>
-            </FormCard>
-
-            {/* Event Details */}
-            <FormCard title="Event Details">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>Event Type</label>
-                  <select value={form.event_type} onChange={e => set('event_type', e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)', background: 'white' }}>
-                    <option value="">Select type</option>
-                    {EVENT_TYPES.map(t => <option key={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>Venue</label>
-                  <select value={form.venue} onChange={e => set('venue', e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-                    style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)', background: 'white' }}>
-                    {VENUES.map(v => <option key={v}>{v}</option>)}
-                  </select>
-                </div>
-                <Field label="Event Date" value={form.event_date} onChange={v => set('event_date', v)} type="date" />
-                <Field label="Event Time" value={form.event_time} onChange={v => set('event_time', v)} placeholder="7:00 PM onwards" />
-                <Field label="Guest Count" value={form.guest_count} onChange={v => set('guest_count', v)} placeholder="50" type="number" />
-              </div>
-              {guestCount > 60 && (
-                <div className="mt-3 px-3 py-2 rounded-lg text-sm"
-                  style={{ background: '#fffbeb', color: '#d97706', border: '1px solid #fcd34d' }}>
-                  ⚠️ {guestCount - 60} extra guests above 60 — ₹{((guestCount - 60) * 750).toLocaleString('en-IN')} additional charge applies
-                </div>
-              )}
-              {guestCount > 70 && (
-                <div className="mt-2 px-3 py-2 rounded-lg text-sm"
-                  style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5' }}>
-                  ❌ Guest count exceeds venue maximum capacity of 70
-                </div>
-              )}
-            </FormCard>
-
-            {/* Package Selection */}
-            <FormCard title="Package">
-              <div className="grid grid-cols-2 gap-3 mb-4">
-                {PACKAGES.map(pkg => (
-                  <button key={pkg.name} onClick={() => selectPackage(pkg)}
-                    className="p-4 rounded-xl text-left transition-all"
-                    style={{
-                      border: form.package_name === pkg.name ? '2px solid var(--gold)' : '1px solid var(--border)',
-                      background: form.package_name === pkg.name ? 'rgba(201,168,76,0.06)' : 'white',
-                    }}>
-                    <div className="font-medium text-sm" style={{ color: form.package_name === pkg.name ? 'var(--gold-dark)' : 'var(--charcoal)' }}>
-                      {pkg.name}
-                    </div>
-                    {pkg.price > 0 ? (
-                      <div className="text-lg font-light mt-1" style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}>
-                        ₹{pkg.price.toLocaleString('en-IN')}
-                      </div>
-                    ) : (
-                      <div className="text-sm mt-1" style={{ color: 'var(--muted)' }}>Enter price below</div>
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              {form.package_name === 'Custom' && (
-                <Field label="Custom Base Price (₹)" value={form.base_price} onChange={v => set('base_price', v)} type="number" placeholder="45000" />
-              )}
-
-              {/* Add-ons */}
-              <div className="mt-4">
-                <label className="text-xs uppercase tracking-wider mb-3 block" style={{ color: 'var(--muted)' }}>Add-ons</label>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  {ADDON_OPTIONS.map(addon => {
-                    const active = form.addons.some(a => a.name === addon.label)
-                    return (
-                      <button key={addon.id} onClick={() => toggleAddon(addon)}
-                        className="text-sm px-3 py-2 rounded-lg transition-all"
-                        style={{
-                          border: active ? '1.5px solid var(--gold)' : '1px solid var(--border)',
-                          background: active ? 'rgba(201,168,76,0.08)' : 'white',
-                          color: active ? 'var(--gold-dark)' : 'var(--slate)',
-                        }}>
-                        {addon.label} <span style={{ color: 'var(--muted)', fontSize: '12px' }}>₹{addon.price.toLocaleString('en-IN')}</span>
-                      </button>
-                    )
-                  })}
-                  <button onClick={addCustomAddon}
-                    className="text-sm px-3 py-2 rounded-lg flex items-center gap-1"
-                    style={{ border: '1px dashed var(--border)', color: 'var(--muted)', background: 'transparent' }}>
-                    <Plus size={12} /> Custom
-                  </button>
-                </div>
-
-                {/* Custom addons */}
-                {form.addons.filter(a => !ADDON_OPTIONS.some(o => o.label === a.name)).map((addon, i) => {
-                  const realIndex = form.addons.indexOf(addon)
-                  return (
-                    <div key={realIndex} className="flex gap-2 mb-2">
-                      <input value={addon.name} onChange={e => updateCustomAddon(realIndex, 'name', e.target.value)}
-                        placeholder="Add-on name"
-                        className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
-                        style={{ border: '1px solid var(--border)' }} />
-                      <input value={addon.price || ''} onChange={e => updateCustomAddon(realIndex, 'price', e.target.value)}
-                        placeholder="₹0" type="number"
-                        className="w-24 px-3 py-2 rounded-lg text-sm outline-none"
-                        style={{ border: '1px solid var(--border)' }} />
-                      <button onClick={() => removeAddon(realIndex)}
-                        className="p-2 rounded-lg hover:bg-red-50"
-                        style={{ color: '#dc2626' }}>
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Discount */}
-              <div className="mt-4 grid grid-cols-2 gap-3">
-                <Field label="Discount Amount (₹)" value={form.discount_amount} onChange={v => set('discount_amount', v)} type="number" placeholder="0" />
-                <Field label="Discount Reason" value={form.discount_reason} onChange={v => set('discount_reason', v)} placeholder="Loyalty / Referral" />
-              </div>
-            </FormCard>
-
-            {/* Special Requirements */}
-            <FormCard title="Additional Notes">
-              <div>
-                <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>Special Requirements / Notes</label>
-                <textarea value={form.special_requirements} onChange={e => set('special_requirements', e.target.value)}
-                  placeholder="Any special arrangements, dietary requirements, decoration preferences..."
-                  rows={3} className="w-full px-3 py-2 rounded-lg text-sm outline-none resize-none"
-                  style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)' }} />
-              </div>
-            </FormCard>
-
-            {error && (
-              <div className="px-4 py-3 rounded-xl flex items-center gap-2 text-sm"
-                style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5' }}>
-                <AlertCircle size={15} /> {error}
-              </div>
-            )}
-
-            <button onClick={createProposal} disabled={isCreating}
-              className="w-full py-4 rounded-xl text-white font-medium flex items-center justify-center gap-3 text-base disabled:opacity-60"
-              style={{ background: 'linear-gradient(135deg, #c9a84c, #a07a28)' }}>
-              {isCreating ? (
-                <><RefreshCw size={18} className="animate-spin" /> AI is writing your proposal...</>
-              ) : (
-                <><Sparkles size={18} /> Create Proposal with AI Cover Note</>
-              )}
-            </button>
-
-            {createdProposal && (
-              <div className="p-5 rounded-xl"
-                style={{ background: '#f0fdf4', border: '1px solid #86efac' }}>
-                <div className="flex items-center gap-2 mb-3">
-                  <CheckCircle size={18} className="text-green-600" />
-                  <span className="font-medium text-green-800">Proposal {createdProposal.proposal_number} Created!</span>
-                </div>
-                <div className="flex gap-3">
-                  <a href={`/api/proposals/${createdProposal.id}/preview`} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white"
-                    style={{ background: '#0f1923' }}>
-                    <Eye size={14} /> Preview
-                  </a>
-                  {createdProposal.share_token && (
-                    <button
-                      onClick={() => {
-                        const url = `${window.location.origin}/proposals/share/${createdProposal.share_token}`
-                        navigator.clipboard.writeText(url).then(() => alert('Share link copied!')).catch(() => {
-                          prompt('Copy this link:', url)
-                        })
-                      }}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm"
-                      style={{ border: '1px solid #c9a84c', color: '#a07a28', background: 'rgba(201,168,76,0.06)' }}>
-                      🔗 Copy Share Link
-                    </button>
-                  )}
-                  <a href={`/api/proposals/${createdProposal.id}/pdf`} target="_blank" rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white"
-                    style={{ background: 'var(--gold-dark, #a07a28)' }}>
-                    <Download size={14} /> Download PDF
-                  </a>
-                  {(createdProposal.client_phone || createdProposal.leads?.phone) && (
-                    <button
-                      onClick={async () => {
-                        // Target: CLIENT's phone — not our own business number
-                        const clientPhone = (createdProposal.client_phone || createdProposal.leads?.phone || '')
-                          .replace(/\D/g, '')                   // strip non-digits
-                          .replace(/^91/, '')                    // remove 91 country code if present
-                        const appUrl = process.env.NEXT_PUBLIC_APP_URL || window.location.origin
-                        const shareUrl = `${appUrl}/proposals/share/${createdProposal.share_token}`
-
-                        // Professional sales message — formatted for readability on mobile
-                        const clientName = createdProposal.client_name || createdProposal.leads?.name || ''
-                        const eventDate = createdProposal.event_date
-                          ? new Date(createdProposal.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
-                          : ''
-
-                        const message = [
-                          `Hello ${clientName},`,
-                          '',
-                          'Thank you for choosing BookMySpaces 🌟',
-                          'Please find your event proposal below:',
-                          '',
-                          `📄 Proposal: *${createdProposal.proposal_number}*`,
-                          createdProposal.event_type ? `🎉 Event: ${createdProposal.event_type}` : '',
-                          eventDate ? `📅 Date: ${eventDate}` : '',
-                          createdProposal.total_price
-                            ? `💰 Total: *₹${createdProposal.total_price.toLocaleString('en-IN')}*`
-                            : '',
-                          '',
-                          `🔗 View Proposal: ${shareUrl}`,
-                          '',
-                          'Please reply *CONFIRM* to proceed with booking.',
-                          '',
-                          'Warm regards,',
-                          'BookMySpaces',
-                          '📞 9051459463 | www.bookmyspaces.in',
-                        ].filter(Boolean).join('\n')
-
-                        // Track delivery — non-blocking
-                        fetch('/api/proposals', {
-                          method: 'PUT',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ id: createdProposal.id, action: 'whatsapp_sent' }),
-                        }).catch(() => {})
-
-                        // Open WhatsApp to CLIENT's number (desktop + mobile compatible)
-                        const waUrl = `https://wa.me/91${clientPhone}?text=${encodeURIComponent(message)}`
-                        window.open(waUrl, '_blank', 'noopener,noreferrer')
-                      }}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm text-white"
-                      style={{ background: '#25D366' }}>
-                      <Send size={14} /> Send Proposal on WhatsApp
-                    </button>
-                  )}
-                  {createdProposal.client_email && (
-                    <button
-                      onClick={async () => {
-                        const res = await fetch('/api/proposals/email', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ proposal_id: createdProposal.id }),
-                        })
-                        const data = await res.json()
-                        if (data.mailto_url) window.open(data.mailto_url, '_blank')
-                        else if (data.success) alert('Email sent successfully!')
-                      }}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm"
-                      style={{ background: '#fff', border: '1px solid #e5e7eb', color: '#374151' }}>
-                      <Send size={14} /> Send via Email
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── SIDEBAR: Live Pricing + Recent ── */}
-          <div className="space-y-6">
-            {/* Live Pricing */}
-            <div className="rounded-2xl p-6 sticky top-24"
-              style={{ background: 'white', border: '1px solid var(--border)' }}>
-              <div className="flex items-center gap-2 mb-5">
-                <Calculator size={16} style={{ color: 'var(--gold)' }} />
-                <h3 className="font-medium" style={{ color: 'var(--charcoal)' }}>Live Pricing</h3>
-              </div>
-
-              <div className="space-y-3">
-                <PricingRow label={`${form.package_name} Package`} amount={basePrice} />
-                {form.addons.map((a, i) => (
-                  <PricingRow key={i} label={a.name || 'Add-on'} amount={a.price} muted />
-                ))}
-                {extraGuestCharge > 0 && (
-                  <PricingRow label={`Extra Guests (${guestCount - 60} pax)`} amount={extraGuestCharge} muted />
-                )}
-                {discountAmt > 0 && (
-                  <PricingRow label={`Discount${form.discount_reason ? ` (${form.discount_reason})` : ''}`} amount={-discountAmt} green />
-                )}
-
-                <div className="border-t pt-3 mt-3" style={{ borderColor: 'var(--border)' }}>
-                  <div className="flex justify-between items-center">
-                    <span className="font-semibold" style={{ color: 'var(--charcoal)' }}>Total</span>
-                    <span className="text-2xl font-light" style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}>
-                      ₹{total.toLocaleString('en-IN')}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center mt-2 text-sm"
-                    style={{ color: '#16a34a' }}>
-                    <span>Advance (30%)</span>
-                    <span className="font-semibold">₹{advance.toLocaleString('en-IN')}</span>
-                  </div>
-                  <div className="flex justify-between items-center mt-1 text-sm"
-                    style={{ color: 'var(--muted)' }}>
-                    <span>Balance on event day</span>
-                    <span>₹{(total - advance).toLocaleString('en-IN')}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Recent Proposals */}
-            <div className="rounded-2xl overflow-hidden"
-              style={{ background: 'white', border: '1px solid var(--border)' }}>
-              <div className="px-4 py-3 border-b flex items-center gap-2"
-                style={{ borderColor: 'var(--border)' }}>
-                <FileText size={14} style={{ color: 'var(--gold)' }} />
-                <span className="font-medium text-sm" style={{ color: 'var(--charcoal)' }}>Recent Proposals</span>
-              </div>
-              {isLoadingProposals ? (
-                <div className="flex justify-center py-6">
-                  <RefreshCw size={18} className="animate-spin" style={{ color: 'var(--gold)' }} />
-                </div>
-              ) : recentProposals.length === 0 ? (
-                <div className="py-6 text-center text-sm" style={{ color: 'var(--muted)' }}>No proposals yet</div>
-              ) : (
-                <div className="divide-y" style={{ maxHeight: '400px', overflowY: 'auto' }}>
-                  {recentProposals.map(p => {
-                    const sc = STATUS_COLORS[p.status] || STATUS_COLORS.draft
-                    return (
-                      <div key={p.id} className="px-4 py-3">
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <p className="font-medium text-sm" style={{ color: 'var(--charcoal)' }}>{p.client_name}</p>
-                            <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{p.proposal_number} · {p.package_name}</p>
-                          </div>
-                          <span className="text-xs px-2 py-0.5 rounded-full"
-                            style={{ background: sc.bg, color: sc.color }}>
-                            {p.status}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between mt-2">
-                          <span className="text-sm font-medium" style={{ color: 'var(--gold-dark)' }}>
-                            ₹{p.total_price?.toLocaleString('en-IN')}
-                          </span>
-                          <div className="flex gap-1 flex-wrap">
-                            <a href={`/api/proposals/${p.id}/preview`} target="_blank" rel="noopener noreferrer"
-                              className="text-xs px-2 py-1 rounded-lg flex items-center gap-1"
-                              style={{ border: '1px solid var(--border)', color: 'var(--slate)', background: 'var(--cream)' }}>
-                              <Eye size={10} /> View
-                            </a>
-                            <a href={`/api/proposals/${p.id}/pdf`} target="_blank" rel="noopener noreferrer"
-                              className="text-xs px-2 py-1 rounded-lg flex items-center gap-1 text-white"
-                              style={{ background: 'var(--gold-dark, #a07a28)' }}>
-                              <Download size={10} /> PDF
-                            </a>
-                            {(p.client_phone || p.share_token) && (
-                              <button
-                                onClick={() => {
-                                  // Use client_phone from proposal, fall back to lead's phone
-                                  const clientPhone = ((p.client_phone || p.leads?.phone || ''))
-                                    .replace(/\D/g, '').replace(/^91/, '')
-                                  if (!clientPhone) return
-                                  const appUrl = window.location.origin
-                                  const shareUrl = p.share_token
-                                    ? `${appUrl}/proposals/share/${p.share_token}`
-                                    : `${appUrl}/api/proposals/${p.id}/preview`
-                                  const eventDate = p.event_date
-                                    ? new Date(p.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
-                                    : ''
-                                  const message = [
-                                    `Hello ${p.client_name || p.leads?.name || ''},`,
-                                    '',
-                                    'Thank you for choosing BookMySpaces 🌟',
-                                    'Please find your event proposal below:',
-                                    '',
-                                    `📄 Proposal: *${p.proposal_number}*`,
-                                    p.event_type ? `🎉 Event: ${p.event_type}` : '',
-                                    eventDate ? `📅 Date: ${eventDate}` : '',
-                                    p.total_price ? `💰 Total: *₹${p.total_price.toLocaleString('en-IN')}*` : '',
-                                    '',
-                                    `🔗 View Proposal: ${shareUrl}`,
-                                    '',
-                                    'Please reply *CONFIRM* to proceed with booking.',
-                                    '',
-                                    'Warm regards, BookMySpaces',
-                                    '📞 9051459463',
-                                  ].filter(Boolean).join('\n')
-                                  fetch('/api/proposals', {
-                                    method: 'PUT',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ id: p.id, action: 'whatsapp_sent' }),
-                                  }).catch(() => {})
-                                  window.open(`https://wa.me/91${clientPhone}?text=${encodeURIComponent(message)}`, '_blank', 'noopener,noreferrer')
-                                }}
-                                className="text-xs px-2 py-1 rounded-lg flex items-center gap-1 text-white"
-                                style={{ background: '#25D366' }}>
-                                <Send size={10} /> WA
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+        {/* Key metrics grid */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-gray-50 rounded-lg p-2.5">
+            <p className="text-xs text-gray-400">Views</p>
+            <div className="flex items-center gap-1.5 mt-1">
+              <EngagementDots count={proposal.viewed_count ?? 0} />
+              <span className="text-xs font-bold text-gray-700">{proposal.viewed_count ?? 0}</span>
             </div>
           </div>
+          <div className="bg-gray-50 rounded-lg p-2.5">
+            <p className="text-xs text-gray-400">Engagement</p>
+            <p className="text-sm font-bold text-gray-700 mt-0.5">{proposal.engagement_score ?? 0}/100</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2.5">
+            <p className="text-xs text-gray-400">Last Viewed</p>
+            <p className="text-xs font-semibold text-gray-700 mt-0.5">{timeAgo(proposal.last_viewed_at)}</p>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-2.5">
+            <p className="text-xs text-gray-400">Since Sent</p>
+            <p className={`text-xs font-semibold mt-0.5 ${urgency.hoursWithoutResponse && urgency.hoursWithoutResponse > 48 ? 'text-red-600' : 'text-gray-700'}`}>
+              {urgency.hoursWithoutResponse !== null ? `${urgency.hoursWithoutResponse}h` : '—'}
+            </p>
+          </div>
         </div>
+
+        {/* AI recommendation */}
+        {urgency.recommendation && (
+          <div className="bg-blue-50 rounded-lg p-2.5 border border-blue-100">
+            <p className="text-xs font-semibold text-blue-700 mb-0.5">Recommendation</p>
+            <p className="text-xs text-blue-600">{urgency.recommendation}</p>
+          </div>
+        )}
+
+        {/* Next action button */}
+        <button
+          onClick={() => onAction(urgency.nextAction, proposal.id)}
+          className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold border transition-colors ${
+            urgency.urgencyScore >= 70
+              ? 'bg-red-600 text-white border-red-700 hover:bg-red-700'
+              : urgency.urgencyScore >= 40
+              ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
+              : 'bg-blue-600 text-white border-blue-700 hover:bg-blue-700'
+          }`}
+        >
+          <Zap className="w-3.5 h-3.5" />
+          {urgency.actionLabel}
+        </button>
       </div>
     </div>
   )
 }
 
-const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
-  draft:    { color: '#6b7280', bg: '#f3f4f6' },
-  sent:     { color: '#2563eb', bg: '#eff6ff' },
-  viewed:   { color: '#7c3aed', bg: '#f5f3ff' },
-  accepted: { color: '#16a34a', bg: '#f0fdf4' },
-  rejected: { color: '#dc2626', bg: '#fef2f2' },
-  expired:  { color: '#9ca3af', bg: '#f9fafb' },
-}
+// ─── Proposal card ────────────────────────────────────────────────────────────
 
-function PricingRow({ label, amount, muted, green }: { label: string; amount: number; muted?: boolean; green?: boolean }) {
-  if (!amount && amount !== 0) return null
-  return (
-    <div className="flex justify-between items-center text-sm">
-      <span style={{ color: green ? '#16a34a' : muted ? 'var(--muted)' : 'var(--slate)' }}>{label}</span>
-      <span style={{ color: green ? '#16a34a' : 'var(--charcoal)' }}>
-        {amount < 0 ? '- ' : ''}₹{Math.abs(amount).toLocaleString('en-IN')}
-      </span>
-    </div>
-  )
-}
-
-function FormCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl p-6" style={{ background: 'white', border: '1px solid var(--border)' }}>
-      <h3 className="text-xs uppercase tracking-wider mb-4" style={{ color: 'var(--muted)' }}>{title}</h3>
-      {children}
-    </div>
-  )
-}
-
-function Field({ label, value, onChange, placeholder, type = 'text' }: {
-  label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string
+function ProposalCard({
+  proposal,
+  onAction,
+  onStatusUpdate,
+}: {
+  proposal      : ProposalWithLead
+  onAction      : (action: string, proposalId: string) => void
+  onStatusUpdate: (id: string, status: ProposalStatus) => void
 }) {
+  const [expanded, setExpanded] = useState(false)
+
+  const lead   = toLeadSnapshot(proposal.leads)
+  const snap   = toProposalSnapshot(proposal)
+  const urgency = computeProposalUrgency(snap, lead)
+  const temp   = proposal.leads?.lead_temperature
+
+  const borderColor =
+    urgency.riskLevel === 'critical' ? 'border-l-red-500' :
+    urgency.riskLevel === 'high'     ? 'border-l-amber-500' :
+    urgency.riskLevel === 'medium'   ? 'border-l-blue-400' :
+                                       'border-l-gray-200'
+
   return (
-    <div>
-      <label className="text-xs mb-1.5 block" style={{ color: 'var(--muted)' }}>{label}</label>
-      <input type={type} value={value} onChange={e => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-        style={{ border: '1px solid var(--border)', fontFamily: 'var(--font-body)', color: 'var(--charcoal)', background: 'white' }} />
+    <div className={`bg-white rounded-xl border border-gray-200 border-l-4 ${borderColor} overflow-hidden transition-shadow hover:shadow-md`}>
+      {/* Card header */}
+      <div className="px-4 py-3">
+        <div className="flex items-start justify-between gap-3 mb-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-bold text-gray-900 truncate">
+                {proposal.client_name ?? 'Unknown Client'}
+              </span>
+              {proposal.proposal_number && (
+                <span className="text-xs text-gray-400 font-mono">{proposal.proposal_number}</span>
+              )}
+              {temp === 'HOT' && (
+                <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-red-600">
+                  <Flame className="w-3 h-3" /> HOT
+                </span>
+              )}
+              {urgency.escalationRequired && (
+                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-600 text-white text-xs font-bold rounded">
+                  <AlertTriangle className="w-2.5 h-2.5" /> PRIORITY
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+              <StatusPill status={proposal.status} />
+              {proposal.event_type && (
+                <span className="text-xs text-gray-500 capitalize">{proposal.event_type}</span>
+              )}
+              {proposal.event_date && (
+                <span className="text-xs text-gray-400">
+                  {new Date(proposal.event_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </span>
+              )}
+            </div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            {proposal.total_price && (
+              <p className="text-base font-black text-gray-900">{formatINR(proposal.total_price)}</p>
+            )}
+            {proposal.guest_count && (
+              <p className="text-xs text-gray-400">{proposal.guest_count} guests</p>
+            )}
+          </div>
+        </div>
+
+        {/* Urgency bar */}
+        <div className="mb-2">
+          <UrgencyBar score={urgency.urgencyScore} />
+        </div>
+
+        {/* Quick metrics row */}
+        <div className="flex items-center gap-3 text-xs text-gray-500">
+          {proposal.sent_at && (
+            <span className="flex items-center gap-1">
+              <Send className="w-3 h-3" /> {timeAgo(proposal.sent_at)}
+            </span>
+          )}
+          {proposal.viewed_count !== null && proposal.viewed_count > 0 && (
+            <span className="flex items-center gap-1 text-blue-600 font-medium">
+              <Eye className="w-3 h-3" /> {proposal.viewed_count} view{proposal.viewed_count !== 1 ? 's' : ''}
+            </span>
+          )}
+          {proposal.last_viewed_at && (
+            <span className="flex items-center gap-1">
+              <Clock className="w-3 h-3" /> last {timeAgo(proposal.last_viewed_at)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* One-click action strip */}
+      <div className="px-4 py-2 bg-gray-50/60 border-t border-gray-100 flex items-center gap-1.5 flex-wrap">
+        <button
+          onClick={() => onAction('send_via_whatsapp', proposal.id)}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-semibold hover:bg-green-100 transition-colors"
+        >
+          <MessageSquare className="w-3 h-3" /> WhatsApp
+        </button>
+        <button
+          onClick={() => onAction('send_via_email', proposal.id)}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors"
+        >
+          <Mail className="w-3 h-3" /> Email
+        </button>
+        <button
+          onClick={() => window.open(`/api/proposals/${proposal.id}/pdf`, '_blank')}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg text-xs font-semibold hover:bg-purple-100 transition-colors"
+        >
+          <Download className="w-3 h-3" /> PDF
+        </button>
+        <button
+          onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/proposals/share/${proposal.id}`); alert('Share link copied!') }}
+          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-gray-100 text-gray-600 border border-gray-200 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors"
+        >
+          <Copy className="w-3 h-3" /> Copy Link
+        </button>
+        {proposal.status !== 'accepted' && (
+          <button
+            onClick={() => onStatusUpdate(proposal.id, 'accepted')}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors ml-auto"
+          >
+            <CheckCircle2 className="w-3 h-3" /> Mark Accepted
+          </button>
+        )}
+
+        {/* Expand toggle */}
+        <button
+          onClick={() => setExpanded((p) => !p)}
+          className="ml-auto p-1 text-gray-400 hover:text-gray-600"
+          title="Toggle intelligence panel"
+        >
+          {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+      </div>
+
+      {/* Intelligence panel — expandable */}
+      {expanded && (
+        <div className="px-4 pb-4 pt-2 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <IntelligencePanel proposal={proposal} urgency={urgency} onAction={onAction} />
+
+          {/* AI content summary */}
+          <div className="space-y-3">
+            {proposal.ai_summary && (
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">AI Summary</p>
+                <p className="text-sm text-gray-700 leading-relaxed">{proposal.ai_summary}</p>
+              </div>
+            )}
+            {proposal.venue_fit_reasoning && (
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Venue Fit</p>
+                <p className="text-sm text-gray-600">{proposal.venue_fit_reasoning}</p>
+              </div>
+            )}
+            {proposal.urgency_cta && (
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                <p className="text-xs font-bold text-amber-700 mb-1">Urgency Message</p>
+                <p className="text-xs text-amber-600">{proposal.urgency_cta}</p>
+              </div>
+            )}
+            {proposal.client_phone && (
+              <a
+                href={`tel:${proposal.client_phone}`}
+                className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors w-full justify-center"
+              >
+                <Phone className="w-3.5 h-3.5" />
+                Call {proposal.client_name ?? 'Client'}
+              </a>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ProposalsPage() {
+  const [proposals, setProposals]   = useState<ProposalWithLead[]>([])
+  const [loading, setLoading]       = useState(true)
+  const [filter, setFilter]         = useState<FilterTab>('all')
+  const [search, setSearch]         = useState('')
+  const [sortBy, setSortBy]         = useState<'urgency' | 'created' | 'value'>('urgency')
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
+
+  const fetchProposals = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res  = await fetch('/api/proposals/intelligence')
+      const data = await res.json() as { proposals?: ProposalWithLead[] }
+      setProposals(Array.isArray(data) ? data : data.proposals ?? [])
+      setLastRefresh(new Date())
+    } catch (err) {
+      console.error('[Proposals] fetch error:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchProposals()
+  }, [fetchProposals])
+
+  async function handleStatusUpdate(id: string, status: ProposalStatus) {
+    try {
+      await fetch(`/api/proposals`, {
+        method : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ id, status, ...(status === 'accepted' ? { accepted_at: new Date().toISOString() } : {}) }),
+      })
+      setProposals((prev) => prev.map((p) => p.id === id ? { ...p, status } : p))
+    } catch (err) {
+      console.error('[Proposals] status update error:', err)
+    }
+  }
+
+  function handleAction(action: string, proposalId: string) {
+    const proposal = proposals.find((p) => p.id === proposalId)
+    if (!proposal) return
+
+    if (action === 'send_via_whatsapp' && proposal.client_phone) {
+      const msg = encodeURIComponent(`Dear ${proposal.client_name ?? 'Sir/Ma\'am'}, please find your proposal from BookMySpaces: ${window.location.origin}/proposals/share/${proposalId}`)
+      window.open(`https://wa.me/${proposal.client_phone.replace(/\D/g, '')}?text=${msg}`, '_blank')
+      handleStatusUpdate(proposalId, 'sent')
+    } else if (action === 'send_via_email' && proposal.client_phone) {
+      window.open(`mailto:?subject=Proposal from BookMySpaces&body=Please find your event proposal: ${window.location.origin}/proposals/share/${proposalId}`, '_blank')
+      handleStatusUpdate(proposalId, 'sent')
+    } else if (action === 'follow_up_now') {
+      handleStatusUpdate(proposalId, 'followed_up')
+    } else if (action === 'mark_accepted') {
+      handleStatusUpdate(proposalId, 'accepted')
+    } else if (action === 'escalate_to_sales') {
+      alert(`Escalated: ${proposal.client_name} — ${proposal.proposal_number}`)
+    }
+  }
+
+  // Derived stats
+  const actionNeededCount = proposals.filter((p) => {
+    const u = computeProposalUrgency(toProposalSnapshot(p), toLeadSnapshot(p.leads))
+    return u.followUpRequired || u.resendRecommended || u.escalationRequired
+  }).length
+  const totalValue = proposals.reduce((s, p) => s + (p.total_price ?? 0), 0)
+  const acceptedValue = proposals.filter((p) => p.status === 'accepted').reduce((s, p) => s + (p.total_price ?? 0), 0)
+
+  // Filter + sort
+  const displayed = proposals
+    .filter((p) => {
+      const u = computeProposalUrgency(toProposalSnapshot(p), toLeadSnapshot(p.leads))
+      const matchesFilter =
+        filter === 'all'           ? true :
+        filter === 'action_needed' ? (u.followUpRequired || u.resendRecommended || u.escalationRequired) :
+        filter === 'hot'           ? p.leads?.lead_temperature === 'HOT' :
+        filter === 'viewed'        ? p.status === 'viewed' :
+        filter === 'sent'          ? p.status === 'sent' :
+        filter === 'accepted'      ? p.status === 'accepted' :
+        true
+
+      const matchesSearch = !search || [p.client_name, p.client_phone, p.event_type, p.proposal_number]
+        .some((f) => f?.toLowerCase().includes(search.toLowerCase()))
+
+      return matchesFilter && matchesSearch
+    })
+    .sort((a, b) => {
+      if (sortBy === 'urgency') return (b.urgency_score ?? 0) - (a.urgency_score ?? 0)
+      if (sortBy === 'value')   return (b.total_price ?? 0) - (a.total_price ?? 0)
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    })
+
+  const FILTER_TABS: { id: FilterTab; label: string; count?: number }[] = [
+    { id: 'all',           label: 'All',           count: proposals.length     },
+    { id: 'action_needed', label: '⚡ Action Needed', count: actionNeededCount  },
+    { id: 'hot',           label: '🔥 HOT Leads'                               },
+    { id: 'viewed',        label: '👁 Viewed'                                  },
+    { id: 'sent',          label: '📤 Sent'                                    },
+    { id: 'accepted',      label: '✅ Accepted'                                 },
+  ]
+
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen"><RefreshCw className="animate-spin" size={24} /></div>}>
-      <ProposalBuilderInner />
-    </Suspense>
+    <div className="min-h-screen bg-gray-50/60">
+      {/* Header */}
+      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3">
+        <div className="max-w-screen-xl mx-auto flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-base font-black text-gray-900 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-blue-600" />
+              Proposal Intelligence
+            </h1>
+            <p className="text-xs text-gray-400">
+              {proposals.length} proposals · {actionNeededCount} need action · {lastRefresh.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {actionNeededCount > 0 && (
+              <button
+                onClick={() => setFilter('action_needed')}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold animate-pulse hover:bg-red-700"
+              >
+                <AlertTriangle className="w-3.5 h-3.5" /> {actionNeededCount} need action
+              </button>
+            )}
+            <button
+              onClick={fetchProposals}
+              disabled={loading}
+              className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div className="max-w-screen-xl mx-auto px-6 py-5 space-y-5">
+        {/* KPI strip */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[
+            { label: 'Total Proposals', value: proposals.length,          icon: FileText,    color: 'bg-gray-100 text-gray-600' },
+            { label: 'Action Needed',   value: actionNeededCount,          icon: AlertTriangle, color: 'bg-red-100 text-red-600' },
+            { label: 'Pipeline Value',  value: formatINR(totalValue),      icon: TrendingUp,  color: 'bg-blue-100 text-blue-600' },
+            { label: 'Won Revenue',     value: formatINR(acceptedValue),   icon: CheckCircle2, color: 'bg-emerald-100 text-emerald-600' },
+          ].map((card) => (
+            <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-4">
+              <div className="flex items-start justify-between mb-2">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">{card.label}</p>
+                <div className={`p-1.5 rounded-xl ${card.color}`}><card.icon className="w-4 h-4" /></div>
+              </div>
+              <p className="text-2xl font-black text-gray-900">{card.value}</p>
+            </div>
+          ))}
+        </div>
+
+        {/* Filters + search */}
+        <div className="bg-white rounded-2xl border border-gray-200 px-4 py-3">
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            {FILTER_TABS.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id)}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filter === f.id ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                {f.label}
+                {f.count !== undefined && (
+                  <span className={`px-1.5 py-0.5 rounded-full text-xs font-bold ${filter === f.id ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>{f.count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative">
+              <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-gray-400" />
+              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+                placeholder="Client, phone, event..."
+                className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs w-44 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50" />
+            </div>
+            <div className="flex items-center gap-1.5 ml-auto">
+              <Filter className="w-3.5 h-3.5 text-gray-400" />
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                className="border border-gray-200 rounded-lg text-xs px-2 py-2 focus:outline-none bg-gray-50"
+              >
+                <option value="urgency">Sort: Urgency</option>
+                <option value="value">Sort: Value</option>
+                <option value="created">Sort: Newest</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Proposal cards */}
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
+          </div>
+        ) : displayed.length === 0 ? (
+          <div className="text-center py-16 bg-white rounded-2xl border border-gray-200">
+            <FileText className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+            <p className="text-sm font-semibold text-gray-500">No proposals match the current filter</p>
+            <button onClick={() => { setFilter('all'); setSearch('') }} className="mt-3 text-xs text-blue-600 hover:underline">Clear filters</button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {displayed.map((proposal) => (
+              <ProposalCard
+                key={proposal.id}
+                proposal={proposal}
+                onAction={handleAction}
+                onStatusUpdate={handleStatusUpdate}
+              />
+            ))}
+          </div>
+        )}
+
+        {displayed.length > 0 && (
+          <p className="text-xs text-gray-400 text-center py-2">
+            {displayed.length} of {proposals.length} proposals · {formatINR(displayed.reduce((s, p) => s + (p.total_price ?? 0), 0))} total value
+          </p>
+        )}
+      </div>
+    </div>
   )
 }
