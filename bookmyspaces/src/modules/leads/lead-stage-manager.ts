@@ -114,15 +114,21 @@ export async function transitionStage({
       return { success: false, previousStage: fromStage, newStage: null, error: updateErr.message };
     }
 
-    // 4. Write audit trail
-    await db.from('stage_transitions').insert({
-      lead_id     : leadId,
-      from_stage  : fromStage,
-      to_stage    : toStage,
-      reason,
-      performed_by: performedBy,
-      metadata    : { forced: force },
-    });
+    // 4. Write audit trail — non-fatal: a missing/failing stage_transitions table
+    // must never roll back a successful lead_stage update.
+    try {
+      await db.from('stage_transitions').insert({
+        lead_id     : leadId,
+        from_stage  : fromStage,
+        to_stage    : toStage,
+        reason,
+        performed_by: performedBy,
+        metadata    : { forced: force },
+      });
+    } catch (auditErr: unknown) {
+      const auditMsg = auditErr instanceof Error ? auditErr.message : String(auditErr);
+      console.warn('[LeadStageManager] Audit log failed (stage update already applied):', auditMsg);
+    }
 
     return { success: true, previousStage: fromStage, newStage: toStage, error: null };
 
