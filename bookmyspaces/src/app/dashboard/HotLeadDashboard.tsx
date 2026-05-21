@@ -436,7 +436,7 @@ export default function SalesOperationsDashboard() {
   const [summary, setSummary]           = useState<DashboardSummary | null>(null)
   const [leads, setLeads]               = useState<Lead[]>([])
   const [loading, setLoading]           = useState(true)
-  const [filter, setFilter]             = useState<FilterType>('hot')
+  const [filter, setFilter]             = useState<FilterType>('all')
   const [stageFilter, setStageFilter]   = useState<LeadStage | 'ALL'>('ALL')
   const [search, setSearch]             = useState('')
   const [sortBy, setSortBy]             = useState<SortField>('priority')
@@ -458,19 +458,45 @@ export default function SalesOperationsDashboard() {
 
   const fetchData = useCallback(async () => {
     setLoading(true)
+
     try {
       const [statsRes, leadsRes] = await Promise.all([
         fetch('/api/dashboard/stats'),
         fetch('/api/leads/hot'),
       ])
-      if (statsRes.ok) setSummary(await statsRes.json() as DashboardSummary)
-      if (leadsRes.ok) {
-        const data = await leadsRes.json() as HotLeadsResponse
-        setLeads(Array.isArray(data) ? data : data.leads ?? [])
+
+      // ── Stats ─────────────────────────────────────────────
+      if (statsRes.ok) {
+        const stats = await statsRes.json() as DashboardSummary
+        setSummary(stats)
+      } else {
+        console.error('[Dashboard] stats API failed:', statsRes.status)
       }
+
+      // ── Leads ─────────────────────────────────────────────
+      if (leadsRes.ok) {
+        const data = await leadsRes.json()
+
+        console.log('[Dashboard] leads API response:', data)
+
+        const parsedLeads =
+          Array.isArray(data)
+            ? data
+            : Array.isArray(data?.leads)
+              ? data.leads
+              : []
+
+        console.log('[Dashboard] parsed leads:', parsedLeads.length)
+
+        setLeads(parsedLeads)
+      } else {
+        console.error('[Dashboard] leads API failed:', leadsRes.status)
+      }
+
       setLastRefresh(new Date())
-    } catch {
-      // Silently retain stale data
+
+    } catch (err) {
+      console.error('[Dashboard] fetchData failed:', err)
     } finally {
       setLoading(false)
     }
