@@ -175,6 +175,8 @@ function logDbErr(label: string, err: {
 
 import { scoreLead } from "@/lib/lead-scorer";
 import { extractLeadDetails } from "@/lib/extract-lead-details";
+import { autoAdvanceStage } from "@/modules/leads/lead-stage-manager";
+import { applyEscalation }  from "@/modules/automation/escalation-engine";
 
 // ─── Full pipeline: C → D → E → F → G → H ───────────────────────────────────
 async function runPipeline(msg: InboundMessage): Promise<void> {
@@ -273,6 +275,9 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
     // ── STEP C-SCORE: Score the lead using extracted + existing DB fields ──────
     // Merges extracted values with whatever was already in the DB so the scorer
     // always has the richest possible input.
+    // `scored` is declared here so STEP C-STAGE can read it safely.
+    let scored: ReturnType<typeof scoreLead> | null = null;
+
     if (leadId) {
       try {
         const scoreInput = {
@@ -291,7 +296,7 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
                           : [],
         };
 
-        const scored = scoreLead(scoreInput);
+        scored = scoreLead(scoreInput);
 
         const { error: scoreErr } = await db
           .from("leads")
@@ -320,6 +325,43 @@ async function runPipeline(msg: InboundMessage): Promise<void> {
       } catch (scoreErr) {
         // Scoring failure is non-fatal — pipeline continues
         console.error("[WhatsApp Webhook] STEP C-SCORE — scoring error (non-fatal):", scoreErr);
+      }
+    }
+
+    // ── STEP C-STAGE: Auto-advance stage + escalation check ──────────────────
+    // Runs only when we have a leadId and a scoring result.
+    // Both calls are non-fatal — any error is logged and the pipeline continues.
+    // Uses tags.includes("VIP") — does NOT reference is_vip column.
+    if (leadId && scored) {
+      try {
+        // Read lead_stage from existingLead safely — it may not be in the SELECT
+        // so we cast through unknown → LeadStage | null rather than through string.
+        const currentStage = ((existingLead as Record<string, unknown>)?.lead_stage ?? null) as import("@/modules/leads/types").LeadStage | null;
+
+        await autoAdvanceStage({
+          id               : leadId,
+          lead_stage       : currentStage,
+          ai_score         : scored.ai_score,
+          estimated_revenue: scored.estimated_revenue,
+          status           : existingLead?.status ?? "new",
+        });
+
+        await applyEscalation(leadId, {
+          id               : leadId,
+          ai_score         : scored.ai_score,
+          lead_temperature : scored.lead_temperature,
+          estimated_revenue: scored.estimated_revenue,
+          tags             : scored.tags,            // VIP check uses tags.includes("VIP")
+          event_type       : extracted.event_type ?? existingLead?.event_type ?? null,
+          guest_count      : extracted.guest_count ?? existingLead?.guest_count ?? null,
+          lead_stage       : currentStage,
+          last_contacted_at: messageTimestamp,
+        });
+
+        console.log("[WhatsApp Webhook] STEP C-STAGE — stage and escalation evaluated for lead:", leadId);
+      } catch (stageErr) {
+        // Non-fatal — never block the pipeline for lifecycle logic
+        console.error("[WhatsApp Webhook] STEP C-STAGE — non-fatal error:", stageErr);
       }
     }
 
