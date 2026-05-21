@@ -317,7 +317,7 @@ function NextActionBadge({ intel }: { intel: LeadIntelligence }) {
   )
 }
 
-function StaleBadge({ reason }: { reason: string }) {
+function StaleBadge() {
   return (
     <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-amber-100 text-amber-700 text-xs font-medium rounded border border-amber-200">
       <Clock className="w-2.5 h-2.5" /> Stale
@@ -464,24 +464,42 @@ function StageDropdown({ lead, onStageChange }: {
 
 // ─── Lead row ─────────────────────────────────────────────────────────────────
 
-function LeadRow({ lead, intel, onStageChange, highlighted }: {
+// Safe fallback intel — guards against React error if intelMap lookup misses.
+const FALLBACK_INTEL: LeadIntelligence = {
+  nextAction          : 'send_followup',
+  followUpStatus      : 'on_track',
+  urgencyScore        : 0,
+  staleReason         : null,
+  hoursWithoutContact : null,
+  isStale             : false,
+  isOverdue           : false,
+  actionLabel         : 'Follow Up',
+  actionColor         : 'text-blue-600',
+}
+
+function LeadRow({ lead, intel, onStageChange, highlighted, rowId }: {
   lead         : Lead
-  intel        : LeadIntelligence
+  intel        : LeadIntelligence | undefined
   onStageChange: (id: string, stage: LeadStage) => void
   highlighted ?: boolean
+  rowId        : string
 }) {
+  const safeIntel = intel ?? FALLBACK_INTEL
   const temp    = lead.lead_temperature
   const rowBase = temp ? TEMP_CONFIG[temp].row : 'hover:bg-gray-50'
-  const isEsc   = lead.escalation_required
+  const isEsc   = lead.escalation_required === true
 
   return (
-    <tr className={`transition-colors border-b border-gray-50 last:border-0 ${rowBase} ${isEsc && temp === 'HOT' ? 'bg-red-50/40' : ''} ${highlighted ? 'ring-1 ring-inset ring-blue-200' : ''}`}>
+    <tr
+      id={rowId}
+      className={`transition-colors border-b border-gray-50 last:border-0 ${rowBase} ${isEsc && temp === 'HOT' ? 'bg-red-50/40' : ''} ${highlighted ? 'ring-1 ring-inset ring-blue-200' : ''}`}
+    >
 
       {/* Priority bar */}
       <td className="pl-4 pr-2 py-3 w-5">
         {isEsc ? (
           <div className="w-1 h-8 rounded-full bg-red-500 mx-auto animate-pulse" title="Escalated" />
-        ) : intel.isOverdue ? (
+        ) : safeIntel.isOverdue ? (
           <div className="w-1 h-8 rounded-full bg-amber-400 mx-auto" title="Overdue" />
         ) : null}
       </td>
@@ -499,7 +517,7 @@ function LeadRow({ lead, intel, onStageChange, highlighted }: {
                 <AlertTriangle className="w-2.5 h-2.5" /> PRIORITY
               </span>
             )}
-            {intel.isStale && !isEsc && <StaleBadge reason={intel.staleReason ?? ''} />}
+            {safeIntel.isStale && !isEsc && <StaleBadge />}
           </div>
           {lead.phone && (
             <a href={`tel:${lead.phone}`} className="text-xs text-blue-500 hover:text-blue-700 flex items-center gap-1 w-fit">
@@ -537,12 +555,12 @@ function LeadRow({ lead, intel, onStageChange, highlighted }: {
         </span>
       </td>
 
-      {/* Next action ← Phase 4 */}
+      {/* Next action */}
       <td className="px-3 py-3 whitespace-nowrap">
-        <NextActionBadge intel={intel} />
-        {intel.staleReason && (
-          <p className="text-xs text-gray-400 mt-0.5 max-w-[120px] truncate" title={intel.staleReason}>
-            {intel.staleReason}
+        <NextActionBadge intel={safeIntel} />
+        {safeIntel.staleReason && (
+          <p className="text-xs text-gray-400 mt-0.5 max-w-[120px] truncate" title={safeIntel.staleReason}>
+            {safeIntel.staleReason}
           </p>
         )}
       </td>
@@ -554,7 +572,7 @@ function LeadRow({ lead, intel, onStageChange, highlighted }: {
 
       {/* Last contact */}
       <td className="px-3 py-3 whitespace-nowrap">
-        <span className={`text-xs font-medium ${intel.hoursWithoutContact !== null && intel.hoursWithoutContact > 24 ? 'text-red-500' : 'text-gray-400'}`}>
+        <span className={`text-xs font-medium ${safeIntel.hoursWithoutContact !== null && safeIntel.hoursWithoutContact > 24 ? 'text-red-500' : 'text-gray-400'}`}>
           {lead.last_contacted_at ? timeAgo(lead.last_contacted_at) : 'Never'}
         </span>
       </td>
@@ -880,14 +898,14 @@ export default function SalesOperationsDashboard() {
                 </thead>
                 <tbody>
                   {displayed.map((lead) => (
-                    <tr key={lead.id} id={`lead-row-${lead.id}`}>
-                      <LeadRow
-                        lead={lead}
-                        intel={intelMap[lead.id]}
-                        onStageChange={handleStageChange}
-                        highlighted={highlightId === lead.id}
-                      />
-                    </tr>
+                    <LeadRow
+                      key={lead.id}
+                      rowId={`lead-row-${lead.id}`}
+                      lead={lead}
+                      intel={intelMap[lead.id]}
+                      onStageChange={handleStageChange}
+                      highlighted={highlightId === lead.id}
+                    />
                   ))}
                 </tbody>
               </table>
