@@ -96,8 +96,6 @@ export async function applyEscalation(
     .from('leads')
     .update({
       escalation_required: true,
-      escalation_reason  : result.reason,
-      escalated_at       : new Date().toISOString(),
       updated_at         : new Date().toISOString(),
     })
     .eq('id', leadId)
