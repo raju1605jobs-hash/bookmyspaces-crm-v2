@@ -182,10 +182,16 @@ export async function autoAdvanceStage(
   if (!targetStage) return;
   if (targetStage === currentStage) return;
 
+  // Score-based qualification is a system-level override — bypass transition
+  // validation because the scoring rule is authoritative regardless of what
+  // prior stage value the DB column holds (including null from un-run migrations).
+  const isScoreQualification = targetStage === 'QUALIFIED' && (lead.ai_score ?? 0) >= 80;
+
   const result = await transitionStage({
     leadId  : lead.id,
     toStage : targetStage,
     reason,
+    force   : isScoreQualification,
   });
 
   if (!result.success) {
