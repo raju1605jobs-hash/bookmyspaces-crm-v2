@@ -39,8 +39,8 @@ export async function GET(): Promise<NextResponse> {
 
     // Merge in Phase 2 fields as null so the frontend type is satisfied
     // even when those columns don't exist yet in the live DB.
-    const leads = (data ?? []).map((row) => ({
-      ...row,
+    const leads = ((data ?? []) as unknown as Record<string, unknown>[]).map((row) => ({
+  ...row,
       lead_stage          : (row as Record<string, unknown>).lead_stage           ?? null,
       escalation_required : (row as Record<string, unknown>).escalation_required  ?? false,
       last_follow_up_at   : (row as Record<string, unknown>).last_follow_up_at    ?? null,
