@@ -145,13 +145,18 @@ export async function autoAdvanceStage(
   let reason = '';
 
   // Rule: high score → QUALIFIED
-  if (score >= 80 && (currentStage === 'NEW' || currentStage === 'CONTACTED')) {
+  // Fires when stage is null (not yet set), NEW, or CONTACTED.
+  // null is explicitly included because lead_stage may not be in the webhook SELECT —
+  // a missing/unset stage with a high score should still be auto-qualified.
+  const isEarlyStage = currentStage === null || currentStage === 'NEW' || currentStage === 'CONTACTED';
+  if (score >= 80 && isEarlyStage) {
     targetStage = 'QUALIFIED';
     reason = `Auto-qualified: ai_score ${score} ≥ 80`;
   }
 
-  // Rule: existing CRM status → map to stage if stage not yet set
-  if (!currentStage) {
+  // Rule: existing CRM status → map to stage if no high-score rule already fired
+  // Only bootstraps if we do not already have a better target from scoring.
+  if (!targetStage && !currentStage) {
     const statusStageMap: Record<string, LeadStage> = {
       new_inquiry      : 'NEW',
       followup_pending : 'CONTACTED',
