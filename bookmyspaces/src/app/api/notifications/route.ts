@@ -1,30 +1,98 @@
-export const dynamic = 'force-dynamic'
-export const runtime = 'nodejs'
+// src/app/api/notifications/route.ts
+// GET  — fetch notifications for current user (unread by default)
+// PATCH — mark notifications read/dismissed
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { getCurrentUser } from '@/lib/supabase-server'
 
-export async function GET() {
-  const supabaseAdmin = getSupabaseAdmin()
+export const dynamic = 'force-dynamic'
+
+export async function GET(req: NextRequest): Promise<NextResponse> {
   try {
-    const { data } = await supabaseAdmin.from('notification_settings').select('*').order('key')
-    const settings: Record<string, string> = {}
-    for (const row of data || []) settings[row.key] = row.value || ''
-    return NextResponse.json({ settings })
-  } catch {
-    return NextResponse.json({ error: 'Failed to fetch settings' }, { status: 500 })
+    const user = await getCurrentUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const { searchParams } = new URL(req.url)
+    const unreadOnly = searchParams.get('unread') !== 'false'
+    const limit      = Math.min(parseInt(searchParams.get('limit') ?? '30'), 100)
+
+    const db = getSupabaseAdmin()
+    let query = db
+      .from('notifications')
+      .select('*')
+      .eq('user_id', user.id)
+      .is('dismissed_at', null)
+      .order('created_at', { ascending: false })
+      .limit(limit)
+
+    if (unreadOnly) query = query.eq('is_read', false)
+
+    const { data, error } = await query
+
+    if (error) {
+      console.error('[API /notifications GET]', error.message)
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
+
+    // Get unread count
+    const { count } = await db
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', user.id)
+      .eq('is_read', false)
+      .is('dismissed_at', null)
+
+    return NextResponse.json({
+      notifications : data ?? [],
+      unread_count  : count ?? 0,
+    })
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[API /notifications GET] unexpected:', msg)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-export async function POST(req: NextRequest) {
-  const supabaseAdmin = getSupabaseAdmin()
+export async function PATCH(req: NextRequest): Promise<NextResponse> {
   try {
-    const { settings } = await req.json()
-    for (const [key, value] of Object.entries(settings)) {
-      await supabaseAdmin.from('notification_settings').upsert({ key, value: String(value), updated_at: new Date().toISOString() }, { onConflict: 'key' })
+    const user = await getCurrentUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+    const body = await req.json() as {
+      ids?    : string[]
+      action  : 'mark_read' | 'mark_all_read' | 'dismiss'
     }
+
+    const db  = getSupabaseAdmin()
+    const now = new Date().toISOString()
+
+    if (body.action === 'mark_all_read') {
+      await db
+        .from('notifications')
+        .update({ is_read: true, read_at: now })
+        .eq('user_id', user.id)
+        .eq('is_read', false)
+
+    } else if (body.ids?.length) {
+      const update =
+        body.action === 'dismiss'
+          ? { dismissed_at: now }
+          : { is_read: true, read_at: now }
+
+      await db
+        .from('notifications')
+        .update(update)
+        .eq('user_id', user.id)
+        .in('id', body.ids)
+    }
+
     return NextResponse.json({ success: true })
-  } catch {
-    return NextResponse.json({ error: 'Failed to save settings' }, { status: 500 })
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error('[API /notifications PATCH]', msg)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
