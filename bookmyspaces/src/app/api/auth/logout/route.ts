@@ -2,7 +2,7 @@
 // Signs out the current user and redirects to login.
 
 import { NextResponse } from 'next/server'
-import { createServerAuthClient } from '@/lib/supabase-auth'
+import { createServerAuthClient } from '@/lib/supabase-server'
 
 export const dynamic = 'force-dynamic'
 

@@ -3,7 +3,7 @@
 // Exchanges the code for a session then redirects.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerAuthClient } from '@/lib/supabase-auth'
+import { createServerAuthClient } from '@/lib/supabase-server'
 
 export const dynamic = 'force-dynamic'
 
