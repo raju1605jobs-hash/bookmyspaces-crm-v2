@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+
 
 import { createServerAuthClient } from '@/lib/supabase-server';
 import { parseExcelBuffer, ParsedLead } from '@/lib/excel-parser';
@@ -8,8 +8,7 @@ export const runtime = 'nodejs';
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  const cookieStore = cookies();
-  const supabase = createServerAuthClient(cookieStore);
+const supabase = createServerAuthClient();
 
   const {
     data: { session },
@@ -155,8 +154,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function GET(): Promise<NextResponse> {
-  const cookieStore = cookies();
-  const supabase = createServerAuthClient(cookieStore);
+  const supabase = createServerAuthClient();
 
   const {
     data: { session },
