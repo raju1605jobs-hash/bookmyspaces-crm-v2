@@ -201,3 +201,99 @@ Require authentication:
 3. Verify callback/logout flow
 4. Integrate user menu
 5. Begin campaign engine
+
+---
+
+# Phase 6.1 Completion — Operational Lead Import Engine
+
+## Status
+COMPLETED — STABLE
+
+## Branch
+phase6-excel-import
+
+## Features Delivered
+
+### Excel / CSV Lead Import
+- .xlsx support
+- .xls support
+- .csv support
+- drag & drop upload
+- authenticated upload flow
+
+### Import Processing
+- validation engine
+- invalid row detection
+- import history
+- upload summary reporting
+
+### Database Integration
+- direct insertion into `leads`
+- logging into `lead_imports`
+- campaign table scaffolded
+
+### Duplicate Protection
+- UNIQUE(phone) constraint enabled
+- repeat uploads safely ignored
+- duplicate-safe imports operational
+
+---
+
+## Engineering Decisions
+
+### Removed
+- unstable upsert(ignoreDuplicates) strategy
+
+### Replaced With
+- existing phone lookup
+- insert-only-new-leads architecture
+
+Reason:
+Supabase upsert produced inconsistent insert reporting.
+
+Benefits:
+- deterministic imports
+- accurate duplicate counting
+- stable ingestion flow
+
+---
+
+## Verified Working Scenarios
+
+### New Upload
+PASS
+
+### Duplicate Upload
+PASS
+
+### Database Persistence
+PASS
+
+### Re-upload Same File
+PASS
+
+### Import History
+PASS
+
+---
+
+## Runtime Notes
+
+### Current Runtime
+Node.js 18
+
+### Future Upgrade Required
+Node.js 20+
+
+Reason:
+Supabase SDK deprecation warning
+
+---
+
+## Architecture Stability
+
+Risk Level:
+LOW
+
+Operational Readiness:
+READY FOR DAILY OPERATIONS
