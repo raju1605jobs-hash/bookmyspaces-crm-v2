@@ -149,7 +149,16 @@ export default function LeadImportPage() {
             type="file"
             accept=".xlsx,.xls,.csv"
             className="hidden"
-            onChange={(e) => e.target.files?.[0] && handleFileSelect(e.target.files[0])}
+            onChange={(e) => {
+  const selected = e.target.files?.[0];
+
+  if (selected) {
+    handleFileSelect(selected);
+  }
+
+  // allow re-selecting same file
+  e.currentTarget.value = '';
+}}
           />
 
           {file ? (

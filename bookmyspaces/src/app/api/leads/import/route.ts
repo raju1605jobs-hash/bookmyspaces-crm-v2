@@ -1,65 +1,70 @@
-// app/api/leads/import/route.ts
-// Handles Excel/CSV upload, validates, inserts leads, tracks import
-
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerAuthClient } from '@/lib/supabase-server';
 import { cookies } from 'next/headers';
+
+import { createServerAuthClient } from '@/lib/supabase-server';
 import { parseExcelBuffer, ParsedLead } from '@/lib/excel-parser';
 
 export const runtime = 'nodejs';
 export const maxDuration = 30;
 
-export async function POST(req: NextRequest) {
-  const supabase = createServerAuthClient();
+export async function POST(req: NextRequest): Promise<NextResponse> {
+  const cookieStore = cookies();
+  const supabase = createServerAuthClient(cookieStore);
 
-  // Auth check
-  const { data: { session } } = await supabase.auth.getSession();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
   if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json(
+      { error: 'Unauthorized' },
+      { status: 401 }
+    );
   }
 
-  // Parse multipart form
-  let formData: FormData;
-  try {
-    formData = await req.formData();
-  } catch {
-    return NextResponse.json({ error: 'Invalid form data' }, { status: 400 });
-  }
+  const formData = await req.formData();
 
   const file = formData.get('file') as File | null;
+
   if (!file) {
-    return NextResponse.json({ error: 'No file provided' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'No file uploaded' },
+      { status: 400 }
+    );
   }
 
-  // Validate file type
-  const validTypes = [
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-excel',
-    'text/csv',
-  ];
-  const fileExt = file.name.split('.').pop()?.toLowerCase();
-  if (!validTypes.includes(file.type) && !['xlsx', 'xls', 'csv'].includes(fileExt || '')) {
-    return NextResponse.json({ error: 'Only Excel (.xlsx, .xls) and CSV files are supported' }, { status: 400 });
+  const ext = file.name.split('.').pop()?.toLowerCase();
+
+  if (!['xlsx', 'xls', 'csv'].includes(ext || '')) {
+    return NextResponse.json(
+      { error: 'Invalid file type' },
+      { status: 400 }
+    );
   }
 
-  // File size limit: 5MB
   if (file.size > 5 * 1024 * 1024) {
-    return NextResponse.json({ error: 'File too large. Maximum 5MB allowed.' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'File exceeds 5MB limit' },
+      { status: 400 }
+    );
   }
 
-  // Parse file
   const buffer = await file.arrayBuffer();
-  let parseResult;
+
+  let parsed;
+
   try {
-    parseResult = parseExcelBuffer(buffer);
-  } catch (err) {
-    return NextResponse.json({ error: 'Failed to parse file. Ensure it is a valid Excel or CSV file.' }, { status: 422 });
+    parsed = parseExcelBuffer(buffer);
+  } catch {
+    return NextResponse.json(
+      { error: 'Failed to parse file' },
+      { status: 400 }
+    );
   }
 
-  const { valid, invalid, totalRows } = parseResult;
+  const { valid, invalid, totalRows } = parsed;
 
-  // Create import record
-  const { data: importRecord, error: importErr } = await supabase
+  const { data: importRecord, error: importError } = await supabase
     .from('lead_imports')
     .insert({
       filename: file.name,
@@ -73,52 +78,65 @@ export async function POST(req: NextRequest) {
     .select('id')
     .single();
 
-  if (importErr || !importRecord) {
-    return NextResponse.json({ error: 'Failed to create import record' }, { status: 500 });
+  if (importError || !importRecord) {
+    return NextResponse.json(
+      { error: 'Failed to create import record' },
+      { status: 500 }
+    );
   }
 
-  // Insert valid leads (deduplicate by phone using upsert)
   let insertedCount = 0;
   let skippedCount = 0;
 
-  if (valid.length > 0) {
-    // Batch insert in chunks of 100
-    const chunkSize = 100;
-    for (let i = 0; i < valid.length; i += chunkSize) {
-      const chunk = valid.slice(i, i + chunkSize);
-      const leadsToInsert = chunk.map((lead: ParsedLead) => ({
+  const chunkSize = 100;
+
+  for (let i = 0; i < valid.length; i += chunkSize) {
+    const chunk: ParsedLead[] = valid.slice(i, i + chunkSize);
+
+    const phones = chunk.map((l) => l.phone);
+
+    const { data: existing } = await supabase
+      .from('leads')
+      .select('phone')
+      .in('phone', phones);
+
+    const existingPhones = new Set(
+      (existing ?? []).map((r: { phone: string }) => r.phone)
+    );
+
+    const newLeads = chunk
+      .filter((l) => !existingPhones.has(l.phone))
+      .map((lead) => ({
         name: lead.name,
         phone: lead.phone,
-        email: lead.email,
-        company: lead.company,
-        source: lead.source,
-        notes: lead.notes,
+        email: lead.email ?? null,
+        source: lead.source ?? 'excel_import',
+        notes: lead.notes ?? null,
         status: 'new',
-        import_id: importRecord.id,
       }));
+        
 
-      // Upsert: skip duplicates by phone
+    skippedCount += chunk.length - newLeads.length;
+
+    if (newLeads.length > 0) {
       const { data: inserted, error: insertErr } = await supabase
         .from('leads')
-        .upsert(leadsToInsert, {
-          onConflict: 'phone',
-          ignoreDuplicates: true,
-        })
+        .insert(newLeads)
         .select('id');
 
-      if (!insertErr && inserted) {
+      console.log('INSERT ERROR:', insertErr);
+
+      if (!insertErr && Array.isArray(inserted)) {
         insertedCount += inserted.length;
-        skippedCount += chunk.length - inserted.length;
       }
     }
   }
 
-  // Update import record status
   await supabase
     .from('lead_imports')
     .update({
-      status: 'completed',
       valid_rows: insertedCount,
+      status: 'completed',
       completed_at: new Date().toISOString(),
     })
     .eq('id', importRecord.id);
@@ -132,25 +150,39 @@ export async function POST(req: NextRequest) {
       skipped: skippedCount,
       invalid: invalid.length,
     },
-    errors: invalid.slice(0, 20), // Return first 20 errors only
+    errors: invalid.slice(0, 20),
   });
 }
 
-// GET: fetch import history
-export async function GET() {
-  const supabase = createServerAuthClient();
+export async function GET(): Promise<NextResponse> {
+  const cookieStore = cookies();
+  const supabase = createServerAuthClient(cookieStore);
 
-  const { data: { session } } = await supabase.auth.getSession();
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
   if (!session) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return NextResponse.json(
+      { error: 'Unauthorized' },
+      { status: 401 }
+    );
   }
 
   const { data, error } = await supabase
     .from('lead_imports')
-    .select('id, filename, total_rows, valid_rows, invalid_rows, status, created_at, completed_at')
+    .select('*')
     .order('created_at', { ascending: false })
     .limit(20);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ imports: data });
+  if (error) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({
+    imports: data ?? [],
+  });
 }
