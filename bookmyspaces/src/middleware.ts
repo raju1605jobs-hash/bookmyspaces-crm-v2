@@ -34,13 +34,29 @@ const PUBLIC_PATHS = [
 ]
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) =>
-    p.endsWith('/') ? pathname.startsWith(p) : pathname === p
-  )
-}
+  // Exact public routes
+  const exactPaths = [
+    '/',
+    '/auth/login',
+    '/auth/logout',
+    '/auth/callback',
+    '/auth/reset-password',
+    '/api/whatsapp/webhook',
+    '/api/health',
+  ]
 
-export async function middleware(request: NextRequest): Promise<NextResponse> {
-  const { pathname } = request.nextUrl
+  // Prefix-based public routes
+  const prefixPaths = [
+    '/proposals/share/',
+    '/api/proposal/share/',
+  ]
+
+  if (exactPaths.includes(pathname)) {
+    return true
+  }
+
+  return prefixPaths.some((p) => pathname.startsWith(p))
+}
 
   // Always allow public paths through without touching session
   if (isPublicPath(pathname)) {
@@ -83,6 +99,6 @@ export const config = {
      * - favicon.ico
      * - public folder files
      */
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|woff|woff2)$).*)',
+'/((?!_next/static|_next/image|favicon.ico|api/whatsapp/|api/health|api/proposal/share|proposals/share/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|css|js|woff|woff2)$).*)',
   ],
 }
