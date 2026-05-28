@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
 
   // ── Load verify token from env ─────────────────────────────────────────────
   const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
+console.log("[WA Webhook GET] ENV TOKEN DIRECT =", JSON.stringify(verifyToken));
 
   if (!verifyToken) {
     console.error(
