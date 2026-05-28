@@ -751,10 +751,10 @@ export default function SalesOperationsDashboard() {
   // ─────────────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-50/60 flex flex-col">
+    <div className="flex flex-col">
 
       {/* Sticky header */}
-      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3">
+      <header className="bg-white border-b border-gray-200 px-6 py-3">
         <div className="max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
           <div>
             <h1 className="text-base font-black text-gray-900 tracking-tight flex items-center gap-2">
