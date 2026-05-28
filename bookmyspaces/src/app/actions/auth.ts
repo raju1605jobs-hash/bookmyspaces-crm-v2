@@ -1,12 +1,11 @@
-```ts
-'use server'
+'use server';
 
-import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
-import { createServerClient } from '@supabase/ssr'
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 
-function createSupabaseServerClient() {
-  const cookieStore = cookies()
+function createClient() {
+  const cookieStore = cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,44 +13,41 @@ function createSupabaseServerClient() {
     {
       cookies: {
         getAll() {
-          return cookieStore.getAll()
+          return cookieStore.getAll();
         },
-
-        setAll(cookiesToSet: any[]) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            cookieStore.set(name, value, options)
-          })
+        setAll(cookiesToSet) {
+          try {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              cookieStore.set(name, value, options);
+            });
+          } catch {
+            // setAll called from a Server Component; can be ignored
+          }
         },
       },
     }
-  )
+  );
 }
 
 export async function login(formData: FormData) {
-  const supabase = createSupabaseServerClient()
+  const supabase = createClient();
 
-  const email = formData.get('email') as string
-  const password = formData.get('password') as string
+  const data = {
+    email: formData.get('email') as string,
+    password: formData.get('password') as string,
+  };
 
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  })
+  const { error } = await supabase.auth.signInWithPassword(data);
 
   if (error) {
-    return {
-      error: error.message,
-    }
+    redirect('/error');
   }
 
-  redirect('/dashboard')
+  redirect('/');
 }
 
 export async function logout() {
-  const supabase = createSupabaseServerClient()
-
-  await supabase.auth.signOut()
-
-  redirect('/auth/login')
+  const supabase = createClient();
+  await supabase.auth.signOut();
+  redirect('/login');
 }
-```
