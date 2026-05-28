@@ -1,43 +1,15 @@
 'use server';
 
-import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
+import { createSupabaseServerClient } from '@/lib/supabase-server';
 
-function createClient() {
-  const cookieStore = cookies();
+export async function login(formData: FormData): Promise<void> {
+  const supabase = createSupabaseServerClient();
 
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll();
-        },
-        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options as Parameters<typeof cookieStore.set>[2]);
-            });
-          } catch {
-            // called from Server Component; safe to ignore
-          }
-        },
-      },
-    }
-  );
-}
+  const email = formData.get('email') as string;
+  const password = formData.get('password') as string;
 
-export async function login(formData: FormData) {
-  const supabase = createClient();
-
-  const data = {
-    email: formData.get('email') as string,
-    password: formData.get('password') as string,
-  };
-
-  const { error } = await supabase.auth.signInWithPassword(data);
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
 
   if (error) {
     redirect('/error');
@@ -46,8 +18,8 @@ export async function login(formData: FormData) {
   redirect('/');
 }
 
-export async function logout() {
-  const supabase = createClient();
+export async function logout(): Promise<void> {
+  const supabase = createSupabaseServerClient();
   await supabase.auth.signOut();
   redirect('/login');
 }

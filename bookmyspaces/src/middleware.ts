@@ -1,101 +1,70 @@
-```ts
-// src/middleware.ts
-// ─────────────────────────────────────────────────────────────────────────────
-// Next.js 14 App Router middleware.
-// Handles:
-//   • Supabase session refresh
-//   • Protected route auth
-//   • Public route bypass
-//   • WhatsApp webhook bypass
-// ─────────────────────────────────────────────────────────────────────────────
+import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
+import type { CookieItem } from '@/lib/supabase-types';
 
-import { NextRequest, NextResponse } from 'next/server'
-import { createMiddlewareAuthClient } from '@/lib/supabase-middleware'
-
-// Public routes that should bypass auth
-const EXACT_PUBLIC_PATHS = [
-  '/',
-  '/auth/login',
-  '/auth/logout',
-  '/auth/callback',
-  '/auth/reset-password',
-  '/api/whatsapp/webhook',
-  '/api/health',
-]
-
-const PREFIX_PUBLIC_PATHS = [
-  '/proposals/share/',
-  '/api/proposal/share/',
-]
+// Paths that must never be intercepted regardless of auth state.
+// WhatsApp webhook routes are intentionally excluded here.
+const PUBLIC_PATHS: RegExp[] = [
+  /^\/api\/webhook(\/.*)?$/,
+  /^\/auth(\/.*)?$/,
+  /^\/_next(\/.*)?$/,
+  /^\/favicon\.ico$/,
+];
 
 function isPublicPath(pathname: string): boolean {
-  // Exact matches
-  if (EXACT_PUBLIC_PATHS.includes(pathname)) {
-    return true
-  }
-
-  // Prefix matches
-  return PREFIX_PUBLIC_PATHS.some((prefix) =>
-    pathname.startsWith(prefix)
-  )
+  return PUBLIC_PATHS.some((pattern) => pattern.test(pathname));
 }
 
-export async function middleware(request: NextRequest) {
-  const pathname = request.nextUrl.pathname
+export async function middleware(request: NextRequest): Promise<NextResponse> {
+  const { pathname } = request.nextUrl;
 
-  // Always allow public routes
+  // Never intercept webhook or public routes
   if (isPublicPath(pathname)) {
-    return NextResponse.next()
+    return NextResponse.next();
   }
 
-  // Allow Next.js internals + static assets
-  if (
-    pathname.startsWith('/_next') ||
-    pathname.startsWith('/favicon.ico') ||
-    pathname.match(/\.(svg|png|jpg|jpeg|gif|webp|ico|css|js|woff|woff2)$/)
-  ) {
-    return NextResponse.next()
-  }
-
-  // Create response for Supabase cookie handling
-  const response = NextResponse.next({
+  let response = NextResponse.next({
     request: {
       headers: request.headers,
     },
-  })
+  });
 
-  try {
-    const supabase = createMiddlewareAuthClient(request, response)
-
-    // Refresh/check session
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-
-    // No session → redirect to login
-    if (!session) {
-      const loginUrl = new URL('/auth/login', request.url)
-
-      loginUrl.searchParams.set('redirect', pathname)
-
-      return NextResponse.redirect(loginUrl)
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll(): CookieItem[] {
+          return request.cookies.getAll().map((c) => ({
+            name: c.name,
+            value: c.value,
+          }));
+        },
+        setAll(cookiesToSet: CookieItem[]): void {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set(name, value);
+            response.cookies.set(name, value, options);
+          });
+        },
+      },
     }
+  );
 
-    // Session exists → continue
-    return response
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  } catch (error) {
-    console.error('[Middleware Error]', error)
-
-    const loginUrl = new URL('/auth/login', request.url)
-
-    return NextResponse.redirect(loginUrl)
+  if (!session) {
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = '/login';
+    return NextResponse.redirect(loginUrl);
   }
+
+  return response;
 }
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico).*)',
+    '/((?!_next/static|_next/image|favicon.ico|api/webhook).*)',
   ],
-}
-```
+};

@@ -1,29 +1,27 @@
 import { createServerClient } from '@supabase/ssr';
-import { cookies } from 'next/headers';
+import { NextRequest, NextResponse } from 'next/server';
 import type { CookieItem } from './supabase-types';
 
-export function createSupabaseServerClient() {
-  const cookieStore = cookies();
-
+export function createSupabaseRouteHandlerClient(
+  request: NextRequest,
+  response: NextResponse
+) {
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         getAll(): CookieItem[] {
-          return cookieStore.getAll().map((c) => ({
+          return request.cookies.getAll().map((c) => ({
             name: c.name,
             value: c.value,
           }));
         },
         setAll(cookiesToSet: CookieItem[]): void {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-            });
-          } catch {
-            // Ignored when called from a Server Component render pass
-          }
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set(name, value);
+            response.cookies.set(name, value, options);
+          });
         },
       },
     }

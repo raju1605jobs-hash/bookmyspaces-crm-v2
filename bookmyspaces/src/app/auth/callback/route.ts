@@ -1,53 +1,44 @@
-import { NextResponse, type NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server';
+import { createServerClient } from '@supabase/ssr';
+import type { CookieItem } from '@/lib/supabase-types';
 
-/**
- * /auth/callback
- *
- * With the Server Action login flow, this route is only needed for:
- * - OAuth providers (Google, GitHub, etc.)
- * - Magic link / OTP flows
- * - PKCE code exchange
- *
- * For password login via Server Action, you never hit this route.
- * It's kept here so OAuth works if you add it later.
- */
-export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url)
-  const code = searchParams.get('code')
-  const next = searchParams.get('next') ?? '/dashboard'
-  const safeNext = next.startsWith('/') ? next : '/dashboard'
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  const { searchParams, origin } = new URL(request.url);
+  const code = searchParams.get('code');
+  const next = searchParams.get('next') ?? '/';
 
-  if (code) {
-    // Dynamic import to avoid issues if @supabase/ssr isn't installed yet
-    const { createServerClient } = await import('@supabase/ssr')
-    const { cookies } = await import('next/headers')
-
-    const cookieStore = cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-      {
-        cookies: {
-          getAll() { return cookieStore.getAll() },
-          setAll(cookiesToSet) {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options)
-            })
-          },
-        },
-      }
-    )
-
-    const { error } = await supabase.auth.exchangeCodeForSession(code)
-    if (error) {
-      return NextResponse.redirect(
-        new URL(`/auth/login?error=${encodeURIComponent(error.message)}`, origin)
-      )
-    }
-
-    return NextResponse.redirect(new URL(safeNext, origin))
+  if (!code) {
+    return NextResponse.redirect(`${origin}/auth/auth-code-error`);
   }
 
-  // No code — redirect to login
-  return NextResponse.redirect(new URL('/auth/login', origin))
+  const response = NextResponse.redirect(`${origin}${next}`);
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll(): CookieItem[] {
+          return request.cookies.getAll().map((c) => ({
+            name: c.name,
+            value: c.value,
+          }));
+        },
+        setAll(cookiesToSet: CookieItem[]): void {
+          cookiesToSet.forEach(({ name, value, options }) => {
+            request.cookies.set(name, value);
+            response.cookies.set(name, value, options);
+          });
+        },
+      },
+    }
+  );
+
+  const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+  if (error) {
+    return NextResponse.redirect(`${origin}/auth/auth-code-error`);
+  }
+
+  return response;
 }
