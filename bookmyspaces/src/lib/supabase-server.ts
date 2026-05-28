@@ -1,6 +1,12 @@
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
-import type { CookieItem } from './supabase-types';
+import type { CookieOptions } from '@supabase/ssr';
+
+export interface CookieItem {
+  name: string;
+  value: string;
+  options?: CookieOptions;
+}
 
 export function createSupabaseServerClient() {
   const cookieStore = cookies();
@@ -28,4 +34,22 @@ export function createSupabaseServerClient() {
       },
     }
   );
+}
+
+// Legacy alias: routes importing createServerAuthClient continue to work
+export const createServerAuthClient = createSupabaseServerClient;
+
+// Legacy helper: routes importing getCurrentUser continue to work
+export async function getCurrentUser() {
+  const supabase = createSupabaseServerClient();
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser();
+
+  if (error || !user) {
+    return null;
+  }
+
+  return user;
 }
