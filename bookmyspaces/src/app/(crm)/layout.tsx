@@ -1,9 +1,9 @@
-import CRMShell from '@/components/layout/CRMShell'
+import CRMLayout from '@/components/layout/CRMLayout'
 
 export default function CRMGroupLayout({
-  children,
+children,
 }: {
-  children: React.ReactNode
+children: React.ReactNode
 }) {
-  return <CRMShell>{children}</CRMShell>
+return <CRMLayout>{children}</CRMLayout>
 }

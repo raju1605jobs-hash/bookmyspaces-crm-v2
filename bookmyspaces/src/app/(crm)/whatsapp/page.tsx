@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   MessageSquare,
   Search,
@@ -138,7 +138,9 @@ function ConvListItem({
           )}
           {lastMsg && (
             <p className="text-xs text-gray-500 truncate">
-              {lastMsg.role === 'assistant' && <Bot className="w-3 h-3 inline mr-1 text-blue-400" />}
+              {lastMsg.role === 'assistant' && (
+                <Bot className="w-3 h-3 inline mr-1 text-blue-400" />
+              )}
               {lastMsg.content}
             </p>
           )}
@@ -187,7 +189,7 @@ function MessageBubble({ msg }: { msg: ConversationMessage }) {
           {!isUser && msg.meta?.sent_to_whatsapp === true && (
             <CheckCheck className="w-3 h-3 text-blue-500" />
           )}
-                   {!isUser && msg.meta?.sent_to_whatsapp === false && (
+          {!isUser && msg.meta?.sent_to_whatsapp === false && (
             <div title="Not yet sent to WhatsApp">
               <Clock className="w-3 h-3 text-gray-300" />
             </div>
@@ -202,37 +204,79 @@ function MessageBubble({ msg }: { msg: ConversationMessage }) {
 
 export default function WhatsAppPage() {
   const [conversations, setConversations] = useState<Conversation[]>([])
-  const [selected, setSelected] = useState<Conversation | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  // FIX 1: Separate loading states.
+  // `initialLoading` only shows the spinner on first load.
+  // Background polls NEVER show the spinner — they update silently.
+  const [initialLoading, setInitialLoading] = useState(true)
+
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<'all' | 'hot' | 'active' | 'unread'>('all')
   const [replyText, setReplyText] = useState('')
   const [sending, setSending] = useState(false)
 
-  const fetchConversations = useCallback(async () => {
-    setLoading(true)
+  // FIX 2: Track selected ID as a ref so fetchConversations never needs
+  // it in its dependency array. This breaks the dep chain that was causing
+  // the interval to reset on every conversation click.
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedId
+
+  // FIX 3: fetchConversations has NO dependencies.
+  // It reads selectedId from the ref (always current) without being
+  // recreated when selectedId changes. This means the interval is set up
+  // exactly once and never torn down until the component unmounts.
+  const fetchConversations = useCallback(async (isBackground = false) => {
+    // Background polls: never show loading spinner
+    if (!isBackground) setInitialLoading(true)
     try {
       const res = await fetch('/api/conversations')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-      const list: Conversation[] = Array.isArray(data) ? data : data.conversations ?? []
+      const list: Conversation[] = Array.isArray(data)
+        ? data
+        : (data.conversations ?? [])
+
       setConversations(list)
-      // Update selected if it is open
-      if (selected) {
-        const updated = list.find((c) => c.id === selected.id)
-        if (updated) setSelected(updated)
+
+      // FIX 4: Update selected conversation using the ref value.
+      // No dependency on `selected` state — reads current value from ref.
+      const currentId = selectedIdRef.current
+      if (currentId) {
+        const updated = list.find((c) => c.id === currentId)
+        // Only update if messages actually changed — prevents unnecessary renders
+        if (updated) {
+          setConversations((prev) => {
+            const idx = prev.findIndex((c) => c.id === currentId)
+            if (idx === -1) return prev
+            // Shallow compare message count to avoid setState if nothing changed
+            if (prev[idx].messages?.length === updated.messages?.length &&
+                prev[idx].updated_at === updated.updated_at) {
+              return prev
+            }
+            const next = [...prev]
+            next[idx] = updated
+            return next
+          })
+        }
       }
     } catch {
-      setConversations([])
+      // On error, keep existing data — don't wipe the UI
     } finally {
-      setLoading(false)
+      if (!isBackground) setInitialLoading(false)
     }
-  }, [selected])
+  }, []) // ← empty deps: this function never changes
 
   useEffect(() => {
-    fetchConversations()
-    const interval = setInterval(fetchConversations, 30_000)
+    // Initial load — shows spinner once
+    fetchConversations(false)
+
+    // FIX 5: Background poll at 30s — passes isBackground=true so no spinner.
+    // Because fetchConversations never changes, this interval is created once
+    // and never recreated. No flicker, no loop.
+    const interval = setInterval(() => fetchConversations(true), 30_000)
     return () => clearInterval(interval)
-  }, [fetchConversations])
+  }, [fetchConversations]) // fetchConversations is stable — this runs once
 
   async function handleSendReply() {
     if (!replyText.trim() || !selected?.phone || sending) return
@@ -248,11 +292,16 @@ export default function WhatsAppPage() {
         }),
       })
       setReplyText('')
-      await fetchConversations()
+      // After sending, do a silent background refresh
+      await fetchConversations(true)
     } finally {
       setSending(false)
     }
   }
+
+  // Derive selected conversation from the list — no separate state for the object
+  // This means it always reflects latest data without an extra setState
+  const selected = conversations.find((c) => c.id === selectedId) ?? null
 
   // Filtered list
   const filtered = conversations.filter((c) => {
@@ -267,7 +316,8 @@ export default function WhatsAppPage() {
       filter === 'all' ||
       (filter === 'hot' && c.lead?.lead_temperature === 'HOT') ||
       (filter === 'active' && c.is_active) ||
-      (filter === 'unread' && c.messages?.some((m) => m.role === 'assistant' && !m.meta?.sent_to_whatsapp))
+      (filter === 'unread' &&
+        c.messages?.some((m) => m.role === 'assistant' && !m.meta?.sent_to_whatsapp))
 
     return matchesSearch && matchesFilter
   })
@@ -288,9 +338,11 @@ export default function WhatsAppPage() {
                 {conversations.length}
               </span>
             </div>
+            {/* Manual refresh button — uses background mode so no spinner */}
             <button
-              onClick={fetchConversations}
+              onClick={() => fetchConversations(true)}
               className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+              title="Refresh"
             >
               <RefreshCw className="w-4 h-4" />
             </button>
@@ -328,7 +380,7 @@ export default function WhatsAppPage() {
 
         {/* List */}
         <div className="flex-1 overflow-y-auto">
-          {loading ? (
+          {initialLoading ? (
             <div className="flex justify-center py-12">
               <Loader2 className="w-5 h-5 animate-spin text-blue-600" />
             </div>
@@ -336,7 +388,9 @@ export default function WhatsAppPage() {
             <div className="text-center py-12 px-4">
               <MessageSquare className="w-8 h-8 text-gray-300 mx-auto mb-2" />
               <p className="text-sm text-gray-500">
-                {search ? 'No conversations match your search.' : 'No conversations yet.'}
+                {search
+                  ? 'No conversations match your search.'
+                  : 'No conversations yet.'}
               </p>
             </div>
           ) : (
@@ -344,8 +398,8 @@ export default function WhatsAppPage() {
               <ConvListItem
                 key={c.id}
                 conv={c}
-                selected={selected?.id === c.id}
-                onSelect={() => setSelected(c)}
+                selected={selectedId === c.id}
+                onSelect={() => setSelectedId(c.id)}
               />
             ))
           )}
@@ -378,7 +432,9 @@ export default function WhatsAppPage() {
                     </span>
                   )}
                   {selected.lead?.event_type && (
-                    <span className="capitalize">{selected.lead.event_type.toLowerCase()}</span>
+                    <span className="capitalize">
+                      {selected.lead.event_type.toLowerCase()}
+                    </span>
                   )}
                   {selected.lead?.guest_count && (
                     <span className="flex items-center gap-1">
@@ -396,10 +452,16 @@ export default function WhatsAppPage() {
             <div className="flex items-center gap-2">
               <span
                 className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${
-                  selected.is_active ? 'text-green-700 bg-green-100' : 'text-gray-600 bg-gray-100'
+                  selected.is_active
+                    ? 'text-green-700 bg-green-100'
+                    : 'text-gray-600 bg-gray-100'
                 }`}
               >
-                <span className={`w-1.5 h-1.5 rounded-full ${selected.is_active ? 'bg-green-500' : 'bg-gray-400'}`} />
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    selected.is_active ? 'bg-green-500' : 'bg-gray-400'
+                  }`}
+                />
                 {selected.is_active ? 'Active' : 'Inactive'}
               </span>
               <span className="text-xs text-gray-400">
@@ -463,13 +525,18 @@ export default function WhatsAppPage() {
           <div className="w-16 h-16 bg-green-100 rounded-2xl flex items-center justify-center mb-4">
             <MessageSquare className="w-8 h-8 text-green-600" />
           </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">WhatsApp Conversations</h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">
+            WhatsApp Conversations
+          </h2>
           <p className="text-sm text-gray-500 max-w-xs">
-            Select a conversation from the left to view messages and send manual replies.
+            Select a conversation from the left to view messages and send manual
+            replies.
           </p>
           <div className="mt-6 grid grid-cols-3 gap-3 text-center text-xs text-gray-400">
             <div className="bg-white rounded-xl p-3 border border-gray-100">
-              <p className="text-lg font-bold text-gray-900">{conversations.length}</p>
+              <p className="text-lg font-bold text-gray-900">
+                {conversations.length}
+              </p>
               <p>Total</p>
             </div>
             <div className="bg-white rounded-xl p-3 border border-gray-100">
@@ -491,7 +558,7 @@ export default function WhatsAppPage() {
       {/* Close selected on mobile */}
       {selected && (
         <button
-          onClick={() => setSelected(null)}
+          onClick={() => setSelectedId(null)}
           className="fixed top-4 left-4 z-10 md:hidden p-2 bg-white rounded-lg shadow border border-gray-200"
         >
           <XCircle className="w-5 h-5 text-gray-600" />
