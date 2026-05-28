@@ -3,13 +3,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Flame, Thermometer, Snowflake, AlertTriangle, Clock,
-  TrendingUp, Users, DollarSign, RefreshCw, ChevronDown,
+  TrendingUp, Users, RefreshCw, ChevronDown,
   ChevronUp, Phone, Calendar, Search, Filter, CheckCircle2,
-  XCircle, Target, Zap, ArrowUpRight, SendHorizonal,
+  XCircle, Zap, ArrowUpRight, SendHorizonal,
   PhoneCall, Eye, RotateCcw, Ban, FileText, ChevronRight,
 } from 'lucide-react'
 
-// ─── Types (inline — no external module dependency) ───────────────────────────
+// --- Types ---
 
 const LEAD_STAGES = [
   'NEW', 'CONTACTED', 'QUALIFIED', 'NEGOTIATING',
@@ -72,7 +72,7 @@ interface DashboardSummary {
   }>
 }
 
-// ─── Phase 4: Intelligence types ─────────────────────────────────────────────
+// --- Intelligence types ---
 
 type NextAction =
   | 'call_immediately'
@@ -93,27 +93,28 @@ type FollowUpStatus =
   | 'confirmed'
 
 interface LeadIntelligence {
-  nextAction      : NextAction
-  followUpStatus  : FollowUpStatus
-  urgencyScore    : number   // 0–100 for priority sort
-  staleReason     : string | null
-  hoursWithoutContact: number | null
-  isStale         : boolean
-  isOverdue       : boolean
-  actionLabel     : string
-  actionColor     : string
+  nextAction          : NextAction
+  followUpStatus      : FollowUpStatus
+  urgencyScore        : number
+  staleReason         : string | null
+  hoursWithoutContact : number | null
+  isStale             : boolean
+  isOverdue           : boolean
+  actionLabel         : string
+  actionColor         : string
 }
 
-// ─── Intelligence engine (pure, no API) ──────────────────────────────────────
+// --- Intelligence engine ---
 
 function computeIntelligence(lead: Lead): LeadIntelligence {
-  const now        = Date.now()
-  const refTime    = lead.last_contacted_at ?? lead.created_at
-  const hoursGone  = Math.floor((now - new Date(refTime).getTime()) / 3_600_000)
-  const score      = lead.ai_score ?? 0
-  const temp       = lead.lead_temperature
-  const stage      = lead.lead_stage
-  const hasProposal= stage === 'PROPOSAL_SENT' || stage === 'NEGOTIATING' || stage === 'VISIT_SCHEDULED' || stage === 'CONFIRMED'
+  const now       = Date.now()
+  const refTime   = lead.last_contacted_at ?? lead.created_at
+  const hoursGone = Math.floor((now - new Date(refTime).getTime()) / 3_600_000)
+  const score     = lead.ai_score ?? 0
+  const temp      = lead.lead_temperature
+  const stage     = lead.lead_stage
+  const hasProposal = stage === 'PROPOSAL_SENT' || stage === 'NEGOTIATING'
+    || stage === 'VISIT_SCHEDULED' || stage === 'CONFIRMED'
 
   let nextAction    : NextAction     = 'send_followup'
   let followUpStatus: FollowUpStatus = 'on_track'
@@ -122,7 +123,6 @@ function computeIntelligence(lead: Lead): LeadIntelligence {
   let isOverdue     = false
   let urgencyScore  = score
 
-  // ── Confirmed / Lost — terminal ───────────────────────────────────────────
   if (stage === 'CONFIRMED') {
     return {
       nextAction: 'close_lead', followUpStatus: 'confirmed',
@@ -140,76 +140,70 @@ function computeIntelligence(lead: Lead): LeadIntelligence {
     }
   }
 
-  // ── HOT lead rules ────────────────────────────────────────────────────────
   if (temp === 'HOT') {
     if (hoursGone > 24) {
-      nextAction    = 'call_immediately'
-      followUpStatus= 'overdue'
-      staleReason   = `No contact for ${hoursGone}h`
-      isStale       = hoursGone > 48
-      isOverdue     = true
+      nextAction     = 'call_immediately'
+      followUpStatus = 'overdue'
+      staleReason    = `No contact for ${hoursGone}h`
+      isStale        = hoursGone > 48
+      isOverdue      = true
       urgencyScore  += 40
     } else if (hoursGone > 4) {
-      nextAction    = 'send_followup'
-      followUpStatus= 'due_today'
+      nextAction     = 'send_followup'
+      followUpStatus = 'due_today'
       urgencyScore  += 20
     }
   }
 
-  // ── No response > 72 hours ────────────────────────────────────────────────
   if (hoursGone > 72 && !isStale) {
-    nextAction    = 're_engage'
-    followUpStatus= 'no_response'
-    staleReason   = `No response in ${Math.floor(hoursGone / 24)} days`
-    isStale       = hoursGone > 120
+    nextAction     = 're_engage'
+    followUpStatus = 'no_response'
+    staleReason    = `No response in ${Math.floor(hoursGone / 24)} days`
+    isStale        = hoursGone > 120
     urgencyScore  += 15
   }
 
-  // ── Stage-based rules ─────────────────────────────────────────────────────
   if (stage === 'QUALIFIED' && !hasProposal) {
     nextAction    = 'send_proposal'
-    urgencyScore  += 30
+    urgencyScore += 30
   }
   if (stage === 'PROPOSAL_SENT') {
-    const proposalHours = hoursGone
-    if (proposalHours > 120) {  // > 5 days
-      nextAction    = 'send_followup'
-      followUpStatus= 'overdue'
-      staleReason   = 'Proposal sent 5+ days ago, no response'
-      isOverdue     = true
+    if (hoursGone > 120) {
+      nextAction     = 'send_followup'
+      followUpStatus = 'overdue'
+      staleReason    = 'Proposal sent 5+ days ago, no response'
+      isOverdue      = true
       urgencyScore  += 25
     } else {
-      nextAction    = 'awaiting_response'
+      nextAction = 'awaiting_response'
     }
   }
   if (stage === 'VISIT_SCHEDULED') {
-    nextAction  = 'close_lead'
+    nextAction    = 'close_lead'
     urgencyScore += 35
   }
   if (score >= 80 && (stage === 'NEW' || stage === 'CONTACTED')) {
     nextAction    = 'call_immediately'
-    urgencyScore  += 20
+    urgencyScore += 20
   }
 
-  // ── Escalation boost ──────────────────────────────────────────────────────
   if (lead.escalation_required) urgencyScore += 50
 
-  // ── Overdue follow-up from scheduler ─────────────────────────────────────
   if (lead.next_follow_up_at && new Date(lead.next_follow_up_at) <= new Date()) {
     followUpStatus = 'overdue'
     isOverdue      = true
-    urgencyScore   += 20
+    urgencyScore  += 20
   }
 
   const ACTION_LABELS: Record<NextAction, { label: string; color: string }> = {
-    call_immediately  : { label: 'Call Now',        color: 'text-red-600'     },
-    send_proposal     : { label: 'Send Proposal',   color: 'text-purple-600'  },
-    schedule_visit    : { label: 'Schedule Visit',  color: 'text-orange-600'  },
-    re_engage         : { label: 'Re-engage',       color: 'text-amber-600'   },
-    close_lead        : { label: 'Close Deal',      color: 'text-emerald-600' },
-    mark_stale        : { label: 'Mark Stale',      color: 'text-gray-400'    },
-    send_followup     : { label: 'Follow Up',       color: 'text-blue-600'    },
-    awaiting_response : { label: 'Awaiting Reply',  color: 'text-gray-500'    },
+    call_immediately  : { label: 'Call Now',       color: 'text-red-600'     },
+    send_proposal     : { label: 'Send Proposal',  color: 'text-purple-600'  },
+    schedule_visit    : { label: 'Schedule Visit', color: 'text-orange-600'  },
+    re_engage         : { label: 'Re-engage',      color: 'text-amber-600'   },
+    close_lead        : { label: 'Close Deal',     color: 'text-emerald-600' },
+    mark_stale        : { label: 'Mark Stale',     color: 'text-gray-400'    },
+    send_followup     : { label: 'Follow Up',      color: 'text-blue-600'    },
+    awaiting_response : { label: 'Awaiting Reply', color: 'text-gray-500'    },
   }
 
   return {
@@ -222,7 +216,7 @@ function computeIntelligence(lead: Lead): LeadIntelligence {
   }
 }
 
-// ─── Priority score (enhanced Phase 4) ───────────────────────────────────────
+// --- Priority sort value ---
 
 function priorityValue(lead: Lead, intel: LeadIntelligence): number {
   let v = intel.urgencyScore * 100
@@ -237,7 +231,7 @@ function priorityValue(lead: Lead, intel: LeadIntelligence): number {
   return v
 }
 
-// ─── Config maps ──────────────────────────────────────────────────────────────
+// --- Config maps ---
 
 const STAGE_CONFIG: Record<LeadStage, { label: string; pill: string; dot: string }> = {
   NEW            : { label: 'New',           pill: 'bg-gray-100 text-gray-700 border border-gray-200',         dot: 'bg-gray-400'    },
@@ -251,9 +245,9 @@ const STAGE_CONFIG: Record<LeadStage, { label: string; pill: string; dot: string
 }
 
 const TEMP_CONFIG: Record<LeadTemperature, { icon: React.ElementType; badge: string; label: string; row: string }> = {
-  HOT : { icon: Flame,       badge: 'bg-red-100 text-red-700 border border-red-200',        label: '🔥 HOT',  row: 'hover:bg-red-50/30'   },
-  WARM: { icon: Thermometer, badge: 'bg-amber-100 text-amber-700 border border-amber-200',  label: '🌤 WARM', row: 'hover:bg-amber-50/20' },
-  COLD: { icon: Snowflake,   badge: 'bg-sky-100 text-sky-700 border border-sky-200',        label: '❄️ COLD', row: 'hover:bg-sky-50/20'   },
+  HOT : { icon: Flame,       badge: 'bg-red-100 text-red-700 border border-red-200',       label: 'HOT',  row: 'hover:bg-red-50/30'   },
+  WARM: { icon: Thermometer, badge: 'bg-amber-100 text-amber-700 border border-amber-200', label: 'WARM', row: 'hover:bg-amber-50/20' },
+  COLD: { icon: Snowflake,   badge: 'bg-sky-100 text-sky-700 border border-sky-200',       label: 'COLD', row: 'hover:bg-sky-50/20'   },
 }
 
 const ACTION_ICONS: Record<NextAction, React.ElementType> = {
@@ -267,13 +261,13 @@ const ACTION_ICONS: Record<NextAction, React.ElementType> = {
   awaiting_response : Clock,
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// --- Helpers ---
 
 function formatINR(amount: number): string {
-  if (amount >= 10_000_000) return `₹${(amount / 10_000_000).toFixed(1)}Cr`
-  if (amount >= 100_000)    return `₹${(amount / 100_000).toFixed(1)}L`
-  if (amount >= 1_000)      return `₹${(amount / 1_000).toFixed(0)}K`
-  return `₹${amount}`
+  if (amount >= 10_000_000) return `\u20B9${(amount / 10_000_000).toFixed(1)}Cr`
+  if (amount >= 100_000)    return `\u20B9${(amount / 100_000).toFixed(1)}L`
+  if (amount >= 1_000)      return `\u20B9${(amount / 1_000).toFixed(0)}K`
+  return `\u20B9${amount}`
 }
 
 function timeAgo(iso: string): string {
@@ -284,24 +278,42 @@ function timeAgo(iso: string): string {
   return `${Math.floor(mins / 1440)}d ago`
 }
 
-// ─── Badge components ─────────────────────────────────────────────────────────
+// --- Badge components ---
 
 function ScoreBadge({ score }: { score: number | null }) {
-  if (score === null) return <span className="text-xs text-gray-300">—</span>
-  const cls = score >= 80 ? 'bg-red-600 text-white' : score >= 60 ? 'bg-amber-500 text-white' : score >= 40 ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-600'
-  return <span className={`inline-flex items-center justify-center w-9 h-7 rounded-lg text-xs font-bold tabular-nums ${cls}`}>{score}</span>
+  if (score === null) return <span className="text-xs text-gray-300">&mdash;</span>
+  const cls = score >= 80
+    ? 'bg-red-600 text-white'
+    : score >= 60 ? 'bg-amber-500 text-white'
+    : score >= 40 ? 'bg-blue-500 text-white'
+    : 'bg-gray-200 text-gray-600'
+  return (
+    <span className={`inline-flex items-center justify-center w-9 h-7 rounded-lg text-xs font-bold tabular-nums ${cls}`}>
+      {score}
+    </span>
+  )
 }
 
 function TempBadge({ temp }: { temp: LeadTemperature | null }) {
   if (!temp) return null
-  const cfg = TEMP_CONFIG[temp]; const Icon = cfg.icon
-  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cfg.badge}`}><Icon className="w-3 h-3" />{temp}</span>
+  const cfg = TEMP_CONFIG[temp]
+  const Icon = cfg.icon
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cfg.badge}`}>
+      <Icon className="w-3 h-3" />{temp}
+    </span>
+  )
 }
 
 function StagePill({ stage }: { stage: LeadStage | null }) {
-  if (!stage) return <span className="text-xs text-gray-300">—</span>
+  if (!stage) return <span className="text-xs text-gray-300">&mdash;</span>
   const cfg = STAGE_CONFIG[stage]
-  return <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium border ${cfg.pill}`}><span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`} />{cfg.label}</span>
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium border ${cfg.pill}`}>
+      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${cfg.dot}`} />
+      {cfg.label}
+    </span>
+  )
 }
 
 function NextActionBadge({ intel }: { intel: LeadIntelligence }) {
@@ -325,11 +337,15 @@ function StaleBadge() {
   )
 }
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
+// --- Stat card ---
 
 function StatCard({ label, value, sub, icon: Icon, accent, highlight }: {
-  label: string; value: string | number; sub?: string
-  icon: React.ElementType; accent: string; highlight?: boolean
+  label     : string
+  value     : string | number
+  sub      ?: string
+  icon      : React.ElementType
+  accent    : string
+  highlight?: boolean
 }) {
   return (
     <div className={`bg-white rounded-2xl border p-4 transition-shadow hover:shadow-md ${highlight ? 'border-red-200 ring-1 ring-red-100' : 'border-gray-200'}`}>
@@ -343,7 +359,7 @@ function StatCard({ label, value, sub, icon: Icon, accent, highlight }: {
   )
 }
 
-// ─── Priority queue card ──────────────────────────────────────────────────────
+// --- Priority queue card ---
 
 function PriorityQueueCard({ title, emoji, leads, onSelect }: {
   title   : string
@@ -373,10 +389,18 @@ function PriorityQueueCard({ title, emoji, leads, onSelect }: {
             >
               <div className="flex items-center gap-2 min-w-0">
                 {lead.lead_temperature && (
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${lead.lead_temperature === 'HOT' ? 'bg-red-500' : lead.lead_temperature === 'WARM' ? 'bg-amber-400' : 'bg-sky-400'}`} />
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                    lead.lead_temperature === 'HOT' ? 'bg-red-500'
+                    : lead.lead_temperature === 'WARM' ? 'bg-amber-400'
+                    : 'bg-sky-400'
+                  }`} />
                 )}
-                <span className="text-sm font-medium text-gray-800 truncate">{lead.name ?? lead.phone ?? 'Unknown'}</span>
-                {lead.event_type && <span className="text-xs text-gray-400 capitalize truncate hidden sm:block">{lead.event_type}</span>}
+                <span className="text-sm font-medium text-gray-800 truncate">
+                  {lead.name ?? lead.phone ?? 'Unknown'}
+                </span>
+                {lead.event_type && (
+                  <span className="text-xs text-gray-400 capitalize truncate hidden sm:block">{lead.event_type}</span>
+                )}
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <NextActionBadge intel={intel} />
@@ -393,16 +417,24 @@ function PriorityQueueCard({ title, emoji, leads, onSelect }: {
   )
 }
 
-// ─── Pipeline card ────────────────────────────────────────────────────────────
+// --- Pipeline card ---
 
 function PipelineCard({ stage, count, revenue, onClick, active }: {
-  stage: LeadStage; count: number; revenue: number; onClick: () => void; active: boolean
+  stage  : LeadStage
+  count  : number
+  revenue: number
+  onClick: () => void
+  active : boolean
 }) {
   const cfg = STAGE_CONFIG[stage]
   return (
     <button
       onClick={onClick}
-      className={`flex-1 min-w-[6.5rem] flex flex-col gap-1 px-3 py-2.5 rounded-xl border text-left transition-all hover:shadow-sm ${active ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-200' : 'border-gray-200 bg-white hover:border-gray-300'}`}
+      className={`flex-1 min-w-[6.5rem] flex flex-col gap-1 px-3 py-2.5 rounded-xl border text-left transition-all hover:shadow-sm ${
+        active
+          ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-200'
+          : 'border-gray-200 bg-white hover:border-gray-300'
+      }`}
     >
       <span className={`text-xs font-semibold px-1.5 py-0.5 rounded-md border w-fit ${cfg.pill}`}>{cfg.label}</span>
       <p className="text-xl font-black text-gray-900 tabular-nums">{count}</p>
@@ -411,10 +443,11 @@ function PipelineCard({ stage, count, revenue, onClick, active }: {
   )
 }
 
-// ─── Stage dropdown ───────────────────────────────────────────────────────────
+// --- Stage dropdown ---
 
 function StageDropdown({ lead, onStageChange }: {
-  lead: Lead; onStageChange: (id: string, stage: LeadStage) => void
+  lead         : Lead
+  onStageChange: (id: string, stage: LeadStage) => void
 }) {
   const [open, setOpen]         = useState(false)
   const [updating, setUpdating] = useState(false)
@@ -434,24 +467,32 @@ function StageDropdown({ lead, onStageChange }: {
     setUpdating(true)
     try {
       const res = await fetch(`/api/leads/${lead.id}/stage`, {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ stage: newStage, reason: 'dashboard update' }),
+        method : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ stage: newStage, reason: 'dashboard update' }),
       })
       if (res.ok) onStageChange(lead.id, newStage)
-    } finally { setUpdating(false) }
+    } finally {
+      setUpdating(false)
+    }
   }
 
   return (
     <div ref={ref} className="relative inline-block">
       <button onClick={() => setOpen((p) => !p)} disabled={updating} className="flex items-center gap-1 group">
         <StagePill stage={lead.lead_stage} />
-        {updating ? <RefreshCw className="w-3 h-3 text-gray-400 animate-spin" /> : <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500" />}
+        {updating
+          ? <RefreshCw className="w-3 h-3 text-gray-400 animate-spin" />
+          : <ChevronDown className="w-3 h-3 text-gray-300 group-hover:text-gray-500" />
+        }
       </button>
       {open && (
         <div className="absolute z-30 top-full left-0 mt-1 w-44 bg-white rounded-xl shadow-lg border border-gray-200 py-1 overflow-hidden">
           {LEAD_STAGES.map((s) => (
             <button key={s} onClick={() => handleSelect(s)}
-              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-50 ${s === lead.lead_stage ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700'}`}>
+              className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-gray-50 ${
+                s === lead.lead_stage ? 'bg-blue-50 text-blue-700 font-semibold' : 'text-gray-700'
+              }`}>
               <span className={`w-1.5 h-1.5 rounded-full ${STAGE_CONFIG[s].dot}`} />
               {STAGE_CONFIG[s].label}
             </button>
@@ -462,9 +503,8 @@ function StageDropdown({ lead, onStageChange }: {
   )
 }
 
-// ─── Lead row ─────────────────────────────────────────────────────────────────
+// --- Lead row ---
 
-// Safe fallback intel — guards against React error if intelMap lookup misses.
 const FALLBACK_INTEL: LeadIntelligence = {
   nextAction          : 'send_followup',
   followUpStatus      : 'on_track',
@@ -485,17 +525,17 @@ function LeadRow({ lead, intel, onStageChange, highlighted, rowId }: {
   rowId        : string
 }) {
   const safeIntel = intel ?? FALLBACK_INTEL
-  const temp    = lead.lead_temperature
-  const rowBase = temp ? TEMP_CONFIG[temp].row : 'hover:bg-gray-50'
-  const isEsc   = lead.escalation_required === true
+  const temp      = lead.lead_temperature
+  const rowBase   = temp ? TEMP_CONFIG[temp].row : 'hover:bg-gray-50'
+  const isEsc     = lead.escalation_required === true
 
   return (
     <tr
       id={rowId}
-      className={`transition-colors border-b border-gray-50 last:border-0 ${rowBase} ${isEsc && temp === 'HOT' ? 'bg-red-50/40' : ''} ${highlighted ? 'ring-1 ring-inset ring-blue-200' : ''}`}
+      className={`transition-colors border-b border-gray-50 last:border-0 ${rowBase} ${
+        isEsc && temp === 'HOT' ? 'bg-red-50/40' : ''
+      } ${highlighted ? 'ring-1 ring-inset ring-blue-200' : ''}`}
     >
-
-      {/* Priority bar */}
       <td className="pl-4 pr-2 py-3 w-5">
         {isEsc ? (
           <div className="w-1 h-8 rounded-full bg-red-500 mx-auto animate-pulse" title="Escalated" />
@@ -503,11 +543,7 @@ function LeadRow({ lead, intel, onStageChange, highlighted, rowId }: {
           <div className="w-1 h-8 rounded-full bg-amber-400 mx-auto" title="Overdue" />
         ) : null}
       </td>
-
-      {/* Temp */}
       <td className="px-2 py-3 whitespace-nowrap"><TempBadge temp={lead.lead_temperature} /></td>
-
-      {/* Contact */}
       <td className="px-3 py-3 min-w-[140px]">
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -526,10 +562,8 @@ function LeadRow({ lead, intel, onStageChange, highlighted, rowId }: {
           )}
         </div>
       </td>
-
-      {/* Event */}
       <td className="px-3 py-3 min-w-[110px]">
-        <p className="text-sm text-gray-800 capitalize font-medium">{lead.event_type ?? '—'}</p>
+        <p className="text-sm text-gray-800 capitalize font-medium">{lead.event_type ?? '\u2014'}</p>
         {lead.event_date && (
           <p className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
             <Calendar className="w-3 h-3" />
@@ -537,25 +571,17 @@ function LeadRow({ lead, intel, onStageChange, highlighted, rowId }: {
           </p>
         )}
       </td>
-
-      {/* Guests */}
       <td className="px-3 py-3 text-center whitespace-nowrap">
-        <span className="text-sm font-semibold text-gray-700 tabular-nums">{lead.guest_count ?? '—'}</span>
+        <span className="text-sm font-semibold text-gray-700 tabular-nums">{lead.guest_count ?? '\u2014'}</span>
       </td>
-
-      {/* Score */}
       <td className="px-3 py-3 text-center whitespace-nowrap">
         <ScoreBadge score={lead.ai_score ?? null} />
       </td>
-
-      {/* Revenue */}
       <td className="px-3 py-3 text-right whitespace-nowrap">
         <span className="text-sm font-bold text-gray-800 tabular-nums">
-          {lead.estimated_revenue ? formatINR(lead.estimated_revenue) : '—'}
+          {lead.estimated_revenue ? formatINR(lead.estimated_revenue) : '\u2014'}
         </span>
       </td>
-
-      {/* Next action */}
       <td className="px-3 py-3 whitespace-nowrap">
         <NextActionBadge intel={safeIntel} />
         {safeIntel.staleReason && (
@@ -564,42 +590,46 @@ function LeadRow({ lead, intel, onStageChange, highlighted, rowId }: {
           </p>
         )}
       </td>
-
-      {/* Stage */}
       <td className="px-3 py-3 whitespace-nowrap">
         <StageDropdown lead={lead} onStageChange={onStageChange} />
       </td>
-
-      {/* Last contact */}
       <td className="px-3 py-3 whitespace-nowrap">
-        <span className={`text-xs font-medium ${safeIntel.hoursWithoutContact !== null && safeIntel.hoursWithoutContact > 24 ? 'text-red-500' : 'text-gray-400'}`}>
+        <span className={`text-xs font-medium ${
+          safeIntel.hoursWithoutContact !== null && safeIntel.hoursWithoutContact > 24
+            ? 'text-red-500' : 'text-gray-400'
+        }`}>
           {lead.last_contacted_at ? timeAgo(lead.last_contacted_at) : 'Never'}
         </span>
       </td>
-
-      {/* Source */}
       <td className="px-3 py-3 pr-4 whitespace-nowrap">
-        <span className="text-xs text-gray-400 capitalize">{lead.source ?? '—'}</span>
+        <span className="text-xs text-gray-400 capitalize">{lead.source ?? '\u2014'}</span>
       </td>
     </tr>
   )
 }
 
-// ─── Sort header ──────────────────────────────────────────────────────────────
+// --- Sort header ---
 
-type SortField = 'priority' | 'score' | 'revenue' | 'created' | 'urgency'
-type SortDir   = 'asc' | 'desc'
-type FilterType = 'all' | 'hot' | 'escalations' | 'qualified' | 'stale' | 'follow_up_due' | 'needs_proposal' | 'confirmed' | 'lost'
+type SortField  = 'priority' | 'score' | 'revenue' | 'created' | 'urgency'
+type SortDir    = 'asc' | 'desc'
+type FilterType = 'all' | 'hot' | 'escalations' | 'qualified' | 'stale'
+  | 'follow_up_due' | 'needs_proposal' | 'confirmed' | 'lost'
 
 function SortTh({ label, field, current, dir, onSort, align = 'left' }: {
-  label: string; field: SortField; current: SortField; dir: SortDir
-  onSort: (f: SortField) => void; align?: 'left' | 'center' | 'right'
+  label  : string
+  field  : SortField
+  current: SortField
+  dir    : SortDir
+  onSort : (f: SortField) => void
+  align ?: 'left' | 'center' | 'right'
 }) {
   const active = current === field
   const Icon   = active && dir === 'asc' ? ChevronUp : ChevronDown
   return (
     <th
-      className={`px-3 py-3 text-xs font-semibold uppercase tracking-wide cursor-pointer select-none whitespace-nowrap group text-${align} ${active ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+      className={`px-3 py-3 text-xs font-semibold uppercase tracking-wide cursor-pointer select-none whitespace-nowrap group text-${align} ${
+        active ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'
+      }`}
       onClick={() => onSort(field)}
     >
       <span className="inline-flex items-center gap-1">
@@ -610,10 +640,14 @@ function SortTh({ label, field, current, dir, onSort, align = 'left' }: {
   )
 }
 
-// ─── Main dashboard ───────────────────────────────────────────────────────────
+// --- Main dashboard ---
+// NOTE: This component renders CONTENT ONLY.
+// The outer shell (sidebar, top nav, page chrome) is provided by
+// src/app/(crm)/layout.tsx — do not add min-h-screen wrappers or
+// sticky headers here, as they would paint over the CRM shell.
 
-export default function SalesOperationsDashboard() {
-  const [summary, setSummary]         = useState<DashboardSummary | null>(null)
+export default function HotLeadDashboard() {
+  const [, setSummary]          = useState<DashboardSummary | null>(null)
   const [leads, setLeads]             = useState<Lead[]>([])
   const [loading, setLoading]         = useState(true)
   const [filter, setFilter]           = useState<FilterType>('all')
@@ -624,19 +658,18 @@ export default function SalesOperationsDashboard() {
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
   const [highlightId, setHighlightId] = useState<string | null>(null)
 
-  // Compute intelligence for all leads (memoised by leads array identity)
   const intelMap = leads.reduce<Record<string, LeadIntelligence>>((acc, l) => {
     acc[l.id] = computeIntelligence(l)
     return acc
   }, {})
 
-  // Stage pipeline counts
   const stageCounts = LEAD_STAGES.reduce<Record<LeadStage, { count: number; revenue: number }>>(
     (acc, s) => {
       const sl = leads.filter((l) => l.lead_stage === s)
       acc[s] = { count: sl.length, revenue: sl.reduce((sum, l) => sum + (l.estimated_revenue ?? 0), 0) }
       return acc
-    }, {} as Record<LeadStage, { count: number; revenue: number }>
+    },
+    {} as Record<LeadStage, { count: number; revenue: number }>
   )
 
   const fetchData = useCallback(async () => {
@@ -651,8 +684,9 @@ export default function SalesOperationsDashboard() {
 
       if (leadsRes.ok) {
         const raw = await leadsRes.json()
-        const arr: Lead[] = Array.isArray(raw) ? raw : Array.isArray(raw?.leads) ? raw.leads : []
-        console.log('[Dashboard] Loaded leads:', arr.length)
+        const arr: Lead[] = Array.isArray(raw)
+          ? raw
+          : Array.isArray(raw?.leads) ? raw.leads : []
         setLeads(arr)
       } else {
         console.error('[Dashboard] Leads error:', leadsRes.status)
@@ -689,35 +723,32 @@ export default function SalesOperationsDashboard() {
     }, 100)
   }
 
-  // ── Derived KPIs ────────────────────────────────────────────────────────────
-  const hotCount        = leads.filter((l) => l.lead_temperature === 'HOT').length
-  const qualifiedCount  = leads.filter((l) => l.lead_stage === 'QUALIFIED' || l.lead_stage === 'NEGOTIATING').length
-  const escCount        = leads.filter((l) => l.escalation_required).length
-  const totalRevenue    = leads.reduce((s, l) => s + (l.estimated_revenue ?? 0), 0)
-  const confirmedCount  = leads.filter((l) => l.lead_stage === 'CONFIRMED').length
-  const convRate        = leads.length > 0 ? Math.round((confirmedCount / leads.length) * 100) : 0
+  const hotCount       = leads.filter((l) => l.lead_temperature === 'HOT').length
+  const qualifiedCount = leads.filter((l) => l.lead_stage === 'QUALIFIED' || l.lead_stage === 'NEGOTIATING').length
+  const escCount       = leads.filter((l) => l.escalation_required).length
+  const totalRevenue   = leads.reduce((s, l) => s + (l.estimated_revenue ?? 0), 0)
+  const confirmedCount = leads.filter((l) => l.lead_stage === 'CONFIRMED').length
+  const convRate       = leads.length > 0 ? Math.round((confirmedCount / leads.length) * 100) : 0
 
-  // ── Priority queue segments ─────────────────────────────────────────────────
-  const overdueLeads     = leads.filter((l) => intelMap[l.id]?.isOverdue && l.lead_stage !== 'CONFIRMED' && l.lead_stage !== 'LOST')
-  const staleLeads       = leads.filter((l) => intelMap[l.id]?.isStale  && l.lead_stage !== 'CONFIRMED' && l.lead_stage !== 'LOST')
-  const needsProposal    = leads.filter((l) => intelMap[l.id]?.nextAction === 'send_proposal')
-  const highIntentLeads  = leads.filter((l) => (l.ai_score ?? 0) >= 75 && l.lead_temperature === 'HOT' && l.lead_stage !== 'CONFIRMED')
+  const overdueLeads    = leads.filter((l) => intelMap[l.id]?.isOverdue && l.lead_stage !== 'CONFIRMED' && l.lead_stage !== 'LOST')
+  const staleLeads      = leads.filter((l) => intelMap[l.id]?.isStale   && l.lead_stage !== 'CONFIRMED' && l.lead_stage !== 'LOST')
+  const needsProposal   = leads.filter((l) => intelMap[l.id]?.nextAction === 'send_proposal')
+  const highIntentLeads = leads.filter((l) => (l.ai_score ?? 0) >= 75 && l.lead_temperature === 'HOT' && l.lead_stage !== 'CONFIRMED')
 
-  // ── Filter + sort ───────────────────────────────────────────────────────────
   const displayed = leads
     .filter((l) => {
       const intel = intelMap[l.id]
       const matchesFilter: boolean =
-        filter === 'all'          ? true :
-        filter === 'hot'          ? l.lead_temperature === 'HOT' :
-        filter === 'escalations'  ? l.escalation_required :
-        filter === 'qualified'    ? l.lead_stage === 'QUALIFIED' :
-        filter === 'stale'        ? (intel?.isStale ?? false) :
-        filter === 'follow_up_due'? (intel?.isOverdue ?? false) :
-        filter === 'needs_proposal'? (intel?.nextAction === 'send_proposal') :
-        filter === 'confirmed'    ? l.lead_stage === 'CONFIRMED' :
-        filter === 'lost'         ? l.lead_stage === 'LOST' :
-        true
+        filter === 'all'            ? true
+        : filter === 'hot'          ? l.lead_temperature === 'HOT'
+        : filter === 'escalations'  ? l.escalation_required
+        : filter === 'qualified'    ? l.lead_stage === 'QUALIFIED'
+        : filter === 'stale'        ? (intel?.isStale ?? false)
+        : filter === 'follow_up_due'? (intel?.isOverdue ?? false)
+        : filter === 'needs_proposal'? (intel?.nextAction === 'send_proposal')
+        : filter === 'confirmed'    ? l.lead_stage === 'CONFIRMED'
+        : filter === 'lost'         ? l.lead_stage === 'LOST'
+        : true
 
       const matchesStage  = stageFilter === 'ALL' || l.lead_stage === stageFilter
       const matchesSearch = !search || [l.name, l.phone, l.event_type, l.email]
@@ -726,7 +757,8 @@ export default function SalesOperationsDashboard() {
       return matchesFilter && matchesStage && matchesSearch
     })
     .sort((a, b) => {
-      const ia = intelMap[a.id]; const ib = intelMap[b.id]
+      const ia = intelMap[a.id]
+      const ib = intelMap[b.id]
       let diff = 0
       if      (sortBy === 'priority') diff = priorityValue(b, ib) - priorityValue(a, ia)
       else if (sortBy === 'urgency')  diff = (ib?.urgencyScore ?? 0) - (ia?.urgencyScore ?? 0)
@@ -737,196 +769,262 @@ export default function SalesOperationsDashboard() {
     })
 
   const QUICK_FILTERS: { id: FilterType; label: string; count?: number }[] = [
-    { id: 'all',           label: 'All Leads',       count: leads.length       },
-    { id: 'hot',           label: '🔥 HOT',          count: hotCount           },
-    { id: 'escalations',   label: '🚨 Priority',     count: escCount           },
-    { id: 'follow_up_due', label: '⏰ Overdue',      count: overdueLeads.length},
-    { id: 'stale',         label: '💤 Stale',        count: staleLeads.length  },
-    { id: 'needs_proposal',label: '📄 Need Proposal',count: needsProposal.length},
-    { id: 'qualified',     label: '✅ Qualified',     count: qualifiedCount     },
-    { id: 'confirmed',     label: '🏆 Confirmed',    count: confirmedCount     },
-    { id: 'lost',          label: '❌ Lost'                                     },
+    { id: 'all',            label: 'All Leads',      count: leads.length        },
+    { id: 'hot',            label: 'HOT',            count: hotCount            },
+    { id: 'escalations',    label: 'Priority',       count: escCount            },
+    { id: 'follow_up_due',  label: 'Overdue',        count: overdueLeads.length },
+    { id: 'stale',          label: 'Stale',          count: staleLeads.length   },
+    { id: 'needs_proposal', label: 'Need Proposal',  count: needsProposal.length},
+    { id: 'qualified',      label: 'Qualified',      count: qualifiedCount      },
+    { id: 'confirmed',      label: 'Confirmed',      count: confirmedCount      },
+    { id: 'lost',           label: 'Lost'                                       },
   ]
 
-  // ─────────────────────────────────────────────────────────────────────────────
-
+  // Renders as a content region — the CRM shell wraps this via (crm)/layout.tsx
   return (
-    <div className="min-h-screen bg-gray-50/60 flex flex-col">
+    <div className="flex flex-col gap-5 p-6">
 
-      {/* Sticky header */}
-      <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3">
-        <div className="max-w-screen-2xl mx-auto flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-base font-black text-gray-900 tracking-tight flex items-center gap-2">
-              <Zap className="w-4 h-4 text-blue-600" />
-              Sales Operations
-            </h1>
-            <p className="text-xs text-gray-400">
-              {leads.length} leads · {overdueLeads.length} overdue · refreshed {lastRefresh.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {escCount > 0 && (
-              <button onClick={() => setFilter('escalations')} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold animate-pulse hover:bg-red-700">
-                <AlertTriangle className="w-3.5 h-3.5" /> {escCount} escalated
+      {/* Page title row — replaces the removed sticky internal header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-black text-gray-900 tracking-tight flex items-center gap-2">
+            <Zap className="w-5 h-5 text-blue-600" />
+            Sales Operations
+          </h1>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {leads.length} leads &middot; {overdueLeads.length} overdue &middot; refreshed{' '}
+            {lastRefresh.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {escCount > 0 && (
+            <button
+              onClick={() => setFilter('escalations')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold animate-pulse hover:bg-red-700"
+            >
+              <AlertTriangle className="w-3.5 h-3.5" /> {escCount} escalated
+            </button>
+          )}
+          <button
+            onClick={fetchData}
+            disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50 font-medium"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* KPI cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <StatCard
+          label="Total Leads" icon={Users} accent="bg-gray-100 text-gray-600"
+          value={leads.length}
+          sub={`${leads.filter((l) => new Date().toDateString() === new Date(l.created_at).toDateString()).length} today`}
+        />
+        <StatCard
+          label="HOT Leads" icon={Flame} accent="bg-red-100 text-red-600"
+          value={hotCount}
+          sub={`${staleLeads.filter((l) => l.lead_temperature === 'HOT').length} stale`}
+          highlight={hotCount > 0}
+        />
+        <StatCard
+          label="Overdue" icon={Clock} accent="bg-amber-100 text-amber-600"
+          value={overdueLeads.length} sub="need action now"
+          highlight={overdueLeads.length > 0}
+        />
+        <StatCard
+          label="Escalated" icon={AlertTriangle} accent="bg-red-100 text-red-600"
+          value={escCount} sub="needs attention"
+          highlight={escCount > 0}
+        />
+        <StatCard
+          label="Pipeline Value" icon={TrendingUp} accent="bg-blue-100 text-blue-600"
+          value={formatINR(totalRevenue)} sub="estimated"
+        />
+        <StatCard
+          label="Conversion" icon={CheckCircle2} accent="bg-emerald-100 text-emerald-600"
+          value={`${convRate}%`} sub={`${confirmedCount} confirmed`}
+        />
+      </div>
+
+      {/* Priority queues */}
+      {(overdueLeads.length > 0 || staleLeads.length > 0 || needsProposal.length > 0 || highIntentLeads.length > 0) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <PriorityQueueCard title="Follow-Up Overdue" emoji="\u23F0" leads={overdueLeads}    onSelect={handleQueueSelect} />
+          <PriorityQueueCard title="Stale Leads"       emoji="\u{1F9CA}" leads={staleLeads}   onSelect={handleQueueSelect} />
+          <PriorityQueueCard title="Needs Proposal"    emoji="\u{1F4C4}" leads={needsProposal} onSelect={handleQueueSelect} />
+          <PriorityQueueCard title="High Intent"       emoji="\u26A1"  leads={highIntentLeads} onSelect={handleQueueSelect} />
+        </div>
+      )}
+
+      {/* Pipeline distribution */}
+      <div className="bg-white rounded-2xl border border-gray-200 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Pipeline Distribution</h2>
+          {stageFilter !== 'ALL' && (
+            <button onClick={() => setStageFilter('ALL')} className="text-xs text-blue-600 hover:underline">Clear filter</button>
+          )}
+        </div>
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {LEAD_STAGES.map((s) => (
+            <PipelineCard
+              key={s} stage={s}
+              count={stageCounts[s].count}
+              revenue={stageCounts[s].revenue}
+              onClick={() => setStageFilter((prev) => prev === s ? 'ALL' : s)}
+              active={stageFilter === s}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Filters + search */}
+      <div className="bg-white rounded-2xl border border-gray-200 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-1.5 mb-3">
+          {QUICK_FILTERS.map((f) => (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                filter === f.id
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}>
+              {f.label}
+              {f.count !== undefined && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
+                  filter === f.id ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'
+                }`}>{f.count}</span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-2 items-center">
+          <div className="relative">
+            <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-gray-400" />
+            <input
+              type="text" value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Name, phone, event..."
+              className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs w-48 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+            />
+            {search && (
+              <button onClick={() => setSearch('')} className="absolute right-2 top-2.5 text-gray-400 hover:text-gray-600">
+                <XCircle className="w-3.5 h-3.5" />
               </button>
             )}
-            <button onClick={fetchData} disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50 font-medium">
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
-            </button>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <Filter className="w-3.5 h-3.5 text-gray-400" />
+            <select
+              value={stageFilter}
+              onChange={(e) => setStageFilter(e.target.value as LeadStage | 'ALL')}
+              className="border border-gray-200 rounded-lg text-xs px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+            >
+              <option value="ALL">All stages</option>
+              {LEAD_STAGES.map((s) => <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-1.5 ml-auto">
+            <ArrowUpRight className="w-3.5 h-3.5 text-gray-400" />
+            <select
+              value={`${sortBy}-${sortDir}`}
+              onChange={(e) => {
+                const [f, d] = e.target.value.split('-') as [SortField, SortDir]
+                setSortBy(f); setSortDir(d)
+              }}
+              className="border border-gray-200 rounded-lg text-xs px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+            >
+              <option value="priority-desc">Sort: Priority</option>
+              <option value="urgency-desc">Sort: Urgency</option>
+              <option value="score-desc">Sort: AI Score &darr;</option>
+              <option value="score-asc">Sort: AI Score &uarr;</option>
+              <option value="revenue-desc">Sort: Revenue &darr;</option>
+              <option value="created-desc">Sort: Newest</option>
+              <option value="created-asc">Sort: Oldest</option>
+            </select>
           </div>
         </div>
-      </header>
+      </div>
 
-      <div className="max-w-screen-2xl mx-auto w-full px-6 py-5 space-y-5">
-
-        {/* KPI cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <StatCard label="Total Leads"    value={leads.length}     sub={`${leads.filter((l) => { const d = new Date(l.created_at); return new Date().toDateString() === d.toDateString() }).length} today`} icon={Users}       accent="bg-gray-100 text-gray-600" />
-          <StatCard label="HOT Leads"      value={hotCount}         sub={`${staleLeads.filter(l=>l.lead_temperature==='HOT').length} stale`}                                                                   icon={Flame}       accent="bg-red-100 text-red-600"     highlight={hotCount > 0} />
-          <StatCard label="Overdue"        value={overdueLeads.length} sub="need action now"                                                                                                                  icon={Clock}       accent="bg-amber-100 text-amber-600"  highlight={overdueLeads.length > 0} />
-          <StatCard label="Escalated"      value={escCount}         sub="needs attention"                                                                                                                      icon={AlertTriangle} accent="bg-red-100 text-red-600"   highlight={escCount > 0} />
-          <StatCard label="Pipeline Value" value={formatINR(totalRevenue)} sub="estimated"                                                                                                                    icon={TrendingUp}  accent="bg-blue-100 text-blue-600" />
-          <StatCard label="Conversion"     value={`${convRate}%`}   sub={`${confirmedCount} confirmed`}                                                                                                       icon={CheckCircle2} accent="bg-emerald-100 text-emerald-600" />
+      {/* Leads table */}
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50/60">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-gray-400" />
+            <span className="text-sm font-bold text-gray-900">{displayed.length}</span>
+            <span className="text-xs text-gray-400">
+              {displayed.length !== leads.length ? `of ${leads.length} leads` : 'leads'}
+            </span>
+          </div>
+          {loading && (
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Updating...
+            </span>
+          )}
         </div>
 
-        {/* Priority queues — Phase 4 */}
-        {(overdueLeads.length > 0 || staleLeads.length > 0 || needsProposal.length > 0 || highIntentLeads.length > 0) && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <PriorityQueueCard title="Follow-Up Overdue" emoji="⏰" leads={overdueLeads}    onSelect={handleQueueSelect} />
-            <PriorityQueueCard title="Stale Leads"       emoji="💤" leads={staleLeads}      onSelect={handleQueueSelect} />
-            <PriorityQueueCard title="Needs Proposal"    emoji="📄" leads={needsProposal}   onSelect={handleQueueSelect} />
-            <PriorityQueueCard title="High Intent"       emoji="⚡" leads={highIntentLeads} onSelect={handleQueueSelect} />
+        {displayed.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center px-6">
+            <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center mb-4">
+              <Users className="w-6 h-6 text-gray-400" />
+            </div>
+            <p className="text-sm font-semibold text-gray-600">No leads match the current filters</p>
+            <p className="text-xs text-gray-400 mt-1">Try changing the filter or search term</p>
+            <button
+              onClick={() => { setFilter('all'); setSearch(''); setStageFilter('ALL') }}
+              className="mt-4 text-xs text-blue-600 hover:underline font-medium"
+            >
+              Clear all filters
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50/80">
+                  <th className="pl-4 pr-2 py-3 w-5" />
+                  <th className="px-2 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Temp</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Contact</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Event</th>
+                  <th className="px-3 py-3 text-center text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Guests</th>
+                  <SortTh label="Score"     field="score"   current={sortBy} dir={sortDir} onSort={handleSort} align="center" />
+                  <SortTh label="Revenue"   field="revenue" current={sortBy} dir={sortDir} onSort={handleSort} align="right"  />
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Next Action</th>
+                  <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Stage</th>
+                  <SortTh label="Contacted" field="created" current={sortBy} dir={sortDir} onSort={handleSort} />
+                  <th className="px-3 py-3 pr-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayed.map((lead) => (
+                  <LeadRow
+                    key={lead.id}
+                    rowId={`lead-row-${lead.id}`}
+                    lead={lead}
+                    intel={intelMap[lead.id]}
+                    onStageChange={handleStageChange}
+                    highlighted={highlightId === lead.id}
+                  />
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
 
-        {/* Pipeline distribution */}
-        <div className="bg-white rounded-2xl border border-gray-200 p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Pipeline Distribution</h2>
-            {stageFilter !== 'ALL' && <button onClick={() => setStageFilter('ALL')} className="text-xs text-blue-600 hover:underline">Clear filter</button>}
+        {displayed.length > 0 && (
+          <div className="px-5 py-2.5 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between">
+            <span className="text-xs text-gray-400">
+              {displayed.filter((l) => l.escalation_required).length} escalated &middot;{' '}
+              {displayed.filter((l) => intelMap[l.id]?.isOverdue).length} overdue &middot;{' '}
+              {displayed.filter((l) => l.lead_temperature === 'HOT').length} hot
+            </span>
+            <span className="text-xs font-semibold text-gray-600">
+              {formatINR(displayed.reduce((s, l) => s + (l.estimated_revenue ?? 0), 0))} pipeline
+            </span>
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {LEAD_STAGES.map((s) => (
-              <PipelineCard key={s} stage={s} count={stageCounts[s].count} revenue={stageCounts[s].revenue}
-                onClick={() => setStageFilter((prev) => prev === s ? 'ALL' : s)} active={stageFilter === s} />
-            ))}
-          </div>
-        </div>
-
-        {/* Filter + search */}
-        <div className="bg-white rounded-2xl border border-gray-200 px-4 py-3">
-          <div className="flex flex-wrap items-center gap-1.5 mb-3">
-            {QUICK_FILTERS.map((f) => (
-              <button key={f.id} onClick={() => setFilter(f.id)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filter === f.id ? 'bg-blue-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                {f.label}
-                {f.count !== undefined && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${filter === f.id ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>{f.count}</span>
-                )}
-              </button>
-            ))}
-          </div>
-          <div className="flex flex-wrap gap-2 items-center">
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-gray-400" />
-              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name, phone, event..."
-                className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs w-48 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50" />
-              {search && <button onClick={() => setSearch('')} className="absolute right-2 top-2.5 text-gray-400 hover:text-gray-600"><XCircle className="w-3.5 h-3.5" /></button>}
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Filter className="w-3.5 h-3.5 text-gray-400" />
-              <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value as LeadStage | 'ALL')}
-                className="border border-gray-200 rounded-lg text-xs px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50">
-                <option value="ALL">All stages</option>
-                {LEAD_STAGES.map((s) => <option key={s} value={s}>{STAGE_CONFIG[s].label}</option>)}
-              </select>
-            </div>
-            <div className="flex items-center gap-1.5 ml-auto">
-              <ArrowUpRight className="w-3.5 h-3.5 text-gray-400" />
-              <select value={`${sortBy}-${sortDir}`}
-                onChange={(e) => { const [f, d] = e.target.value.split('-') as [SortField, SortDir]; setSortBy(f); setSortDir(d) }}
-                className="border border-gray-200 rounded-lg text-xs px-2 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50">
-                <option value="priority-desc">Sort: Priority</option>
-                <option value="urgency-desc">Sort: Urgency</option>
-                <option value="score-desc">Sort: AI Score ↓</option>
-                <option value="score-asc">Sort: AI Score ↑</option>
-                <option value="revenue-desc">Sort: Revenue ↓</option>
-                <option value="created-desc">Sort: Newest</option>
-                <option value="created-asc">Sort: Oldest</option>
-              </select>
-            </div>
-          </div>
-        </div>
-
-        {/* Leads table */}
-        <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden">
-          <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 bg-gray-50/60">
-            <div className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-gray-400" />
-              <span className="text-sm font-bold text-gray-900">{displayed.length}</span>
-              <span className="text-xs text-gray-400">{displayed.length !== leads.length ? `of ${leads.length} leads` : 'leads'}</span>
-            </div>
-            {loading && <span className="text-xs text-gray-400 flex items-center gap-1"><RefreshCw className="w-3 h-3 animate-spin" /> Updating...</span>}
-          </div>
-
-          {displayed.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center px-6">
-              <div className="w-12 h-12 rounded-2xl bg-gray-100 flex items-center justify-center mb-4"><Users className="w-6 h-6 text-gray-400" /></div>
-              <p className="text-sm font-semibold text-gray-600">No leads match the current filters</p>
-              <p className="text-xs text-gray-400 mt-1">Try changing the filter or search term</p>
-              <button onClick={() => { setFilter('all'); setSearch(''); setStageFilter('ALL') }} className="mt-4 text-xs text-blue-600 hover:underline font-medium">Clear all filters</button>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-gray-100 bg-gray-50/80">
-                    <th className="pl-4 pr-2 py-3 w-5" />
-                    <th className="px-2 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Temp</th>
-                    <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Contact</th>
-                    <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Event</th>
-                    <th className="px-3 py-3 text-center text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Guests</th>
-                    <SortTh label="Score"   field="score"   current={sortBy} dir={sortDir} onSort={handleSort} align="center" />
-                    <SortTh label="Revenue" field="revenue" current={sortBy} dir={sortDir} onSort={handleSort} align="right"  />
-                    <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide whitespace-nowrap">Next Action</th>
-                    <th className="px-3 py-3 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Stage</th>
-                    <SortTh label="Contacted" field="created" current={sortBy} dir={sortDir} onSort={handleSort} />
-                    <th className="px-3 py-3 pr-4 text-left text-xs font-semibold text-gray-400 uppercase tracking-wide">Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayed.map((lead) => (
-                    <LeadRow
-                      key={lead.id}
-                      rowId={`lead-row-${lead.id}`}
-                      lead={lead}
-                      intel={intelMap[lead.id]}
-                      onStageChange={handleStageChange}
-                      highlighted={highlightId === lead.id}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {displayed.length > 0 && (
-            <div className="px-5 py-2.5 border-t border-gray-100 bg-gray-50/60 flex items-center justify-between">
-              <span className="text-xs text-gray-400">
-                {displayed.filter((l) => l.escalation_required).length} escalated ·{' '}
-                {displayed.filter((l) => intelMap[l.id]?.isOverdue).length} overdue ·{' '}
-                {displayed.filter((l) => l.lead_temperature === 'HOT').length} hot
-              </span>
-              <span className="text-xs font-semibold text-gray-600">
-                {formatINR(displayed.reduce((s, l) => s + (l.estimated_revenue ?? 0), 0))} pipeline
-              </span>
-            </div>
-          )}
-        </div>
-
+        )}
       </div>
+
     </div>
   )
 }
