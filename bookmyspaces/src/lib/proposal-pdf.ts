@@ -1,14 +1,46 @@
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 // PDF PROPOSAL GENERATOR
 // Generates a beautiful HTML proposal (printable as PDF)
 // Uses browser print API — no server-side PDF library needed
-// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 
 import { ProposalData } from './scoring'
 
 export function generateProposalHTML(
   proposal: ProposalData & { proposal_number?: string; ai_cover_note?: string }
 ): string {
+
+  // ── FIELD NORMALISATION ──────────────────────────────────────────────────
+  // ProposalData uses base_price / total_price / advance_required.
+  // Live DB records use subtotal / total_amount / discount_value.
+  // Whichever shape arrives, normalise once here so the rest of the
+  // function never sees undefined.
+  const basePrice: number =
+    (proposal as any).base_price ??
+    (proposal as any).subtotal ??
+    0
+
+  const totalPrice: number =
+    (proposal as any).total_price ??
+    (proposal as any).total_amount ??
+    0
+
+  const advanceRequired: number =
+    (proposal as any).advance_required ??
+    (proposal as any).advance_amount ??
+    Math.round(totalPrice * 0.5)
+
+  const packageName: string =
+    (proposal as any).package_name ??
+    (proposal as any).package ??
+    'Standard'
+
+  const venueName: string =
+    (proposal as any).venue ??
+    (proposal as any).venue_name ??
+    'BookMySpaces'
+  // ────────────────────────────────────────────────────────────────────────
+
   const today = new Date().toLocaleDateString('en-IN', {
     day: 'numeric',
     month: 'long',
@@ -36,7 +68,7 @@ export function generateProposalHTML(
       : ''
 
   const inclusionsList = (
-    proposal.inclusions || getDefaultInclusions(proposal.package_name)
+    proposal.inclusions || getDefaultInclusions(packageName)
   )
     .map(inc => `<li style="padding: 4px 0; color: #4a4a5a; font-size: 14px;">${inc}</li>`)
     .join('')
@@ -49,9 +81,9 @@ export function generateProposalHTML(
 <title>Proposal ${proposal.proposal_number || ''} — BookMySpaces</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=DM+Sans:wght@300;400;500;600&display=swap');
-  
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  
+
   body {
     font-family: 'DM Sans', system-ui, sans-serif;
     color: #1a1a1a;
@@ -267,7 +299,7 @@ export function generateProposalHTML(
   }
 
   .inclusions-list li::before {
-    content: '✓ ';
+    content: '✔ ';
     color: #c9a84c;
     font-weight: 600;
   }
@@ -398,7 +430,7 @@ export function generateProposalHTML(
       </div>` : ''}
       <div class="detail-item">
         <div class="detail-label">Venue</div>
-        <div class="detail-value">${proposal.venue}</div>
+        <div class="detail-value">${venueName}</div>
       </div>
     </div>
   </div>
@@ -407,22 +439,22 @@ export function generateProposalHTML(
   <div class="section">
     <div class="section-label">Selected Package</div>
     <div class="package-card">
-      <div class="package-tier">BookMySpaces · ${proposal.venue}</div>
-      <div class="package-name">${proposal.package_name} Package</div>
-      <div class="package-price">₹${proposal.base_price.toLocaleString('en-IN')}</div>
+      <div class="package-tier">BookMySpaces · ${venueName}</div>
+      <div class="package-name">${packageName} Package</div>
+      <div class="package-price">₹${basePrice.toLocaleString('en-IN')}</div>
     </div>
 
     <!-- PRICING BREAKDOWN -->
     <table class="pricing-table">
       <tr>
-        <td style="padding: 8px 0; color: #4a4a5a; font-size: 14px;">${proposal.package_name} Package</td>
-        <td style="padding: 8px 0; text-align: right; color: #1a1a1a; font-size: 14px;">₹${proposal.base_price.toLocaleString('en-IN')}</td>
+        <td style="padding: 8px 0; color: #4a4a5a; font-size: 14px;">${packageName} Package</td>
+        <td style="padding: 8px 0; text-align: right; color: #1a1a1a; font-size: 14px;">₹${basePrice.toLocaleString('en-IN')}</td>
       </tr>
       ${addonsRows}
       ${discountRow}
       <tr class="total-row">
         <td>Total Amount</td>
-        <td style="text-align: right; color: #c9a84c;">₹${proposal.total_price.toLocaleString('en-IN')}</td>
+        <td style="text-align: right; color: #c9a84c;">₹${totalPrice.toLocaleString('en-IN')}</td>
       </tr>
     </table>
 
@@ -431,7 +463,7 @@ export function generateProposalHTML(
         <div class="advance-label" style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.1em;">Advance to Confirm Booking</div>
         <div style="font-size: 12px; color: #16a34a; margin-top: 2px;">Balance due on event day</div>
       </div>
-      <div class="advance-amount">₹${proposal.advance_required.toLocaleString('en-IN')}</div>
+      <div class="advance-amount">₹${advanceRequired.toLocaleString('en-IN')}</div>
     </div>
   </div>
 
@@ -451,7 +483,7 @@ export function generateProposalHTML(
   <!-- FOOTER / CTA -->
   <div class="footer">
     <div class="footer-cta">Ready to Celebrate? Let's Confirm Your Booking.</div>
-    
+
     <div class="contact-grid">
       <div class="contact-item">
         <div class="contact-label">WhatsApp / Call</div>

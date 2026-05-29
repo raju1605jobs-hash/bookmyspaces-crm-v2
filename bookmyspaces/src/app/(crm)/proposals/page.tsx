@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import {
   FileText, Send, Eye, Clock, CheckCircle2, XCircle,
   AlertTriangle, Flame, RefreshCw, Download, MessageSquare,
   Mail, Copy, Phone, TrendingUp, Zap, ChevronDown,
   ChevronUp, BarChart3, Filter, Search, ExternalLink,
+  Plus,
 } from 'lucide-react'
 import {
   computeProposalUrgency,
@@ -98,7 +100,7 @@ function toLeadSnapshot(raw: LeadSnapshotRaw | null): LeadSnapshot {
     lead_temperature : raw?.lead_temperature ?? null,
     urgency_level    : raw?.urgency_level    ?? null,
     lead_stage       : raw?.lead_stage       ?? null,
-    estimated_revenue: raw?.estimated_revenue?? null,
+    estimated_revenue: raw?.estimated_revenue ?? null,
     score_breakdown  : null,
   }
 }
@@ -124,21 +126,21 @@ function toProposalSnapshot(p: ProposalWithLead): ProposalSnapshot {
 // ─── Status config ────────────────────────────────────────────────────────────
 
 const STATUS_CONFIG: Record<ProposalStatus, { label: string; pill: string; icon: React.ElementType }> = {
-  draft       : { label: 'Draft',       pill: 'bg-gray-100 text-gray-600 border border-gray-200',           icon: FileText      },
-  generated   : { label: 'Generated',   pill: 'bg-blue-50 text-blue-700 border border-blue-200',            icon: Zap           },
-  sent        : { label: 'Sent',        pill: 'bg-indigo-50 text-indigo-700 border border-indigo-200',      icon: Send          },
-  viewed      : { label: 'Viewed',      pill: 'bg-amber-50 text-amber-700 border border-amber-200',         icon: Eye           },
-  followed_up : { label: 'Followed Up', pill: 'bg-orange-50 text-orange-700 border border-orange-200',      icon: MessageSquare },
-  accepted    : { label: 'Accepted',    pill: 'bg-emerald-50 text-emerald-700 border border-emerald-200',   icon: CheckCircle2  },
-  rejected    : { label: 'Rejected',    pill: 'bg-red-50 text-red-700 border border-red-200',               icon: XCircle       },
-  expired     : { label: 'Expired',     pill: 'bg-gray-50 text-gray-400 border border-gray-200',            icon: Clock         },
+  draft       : { label: 'Draft',       pill: 'bg-gray-100 text-gray-600 border border-gray-200',         icon: FileText      },
+  generated   : { label: 'Generated',   pill: 'bg-blue-50 text-blue-700 border border-blue-200',          icon: Zap           },
+  sent        : { label: 'Sent',        pill: 'bg-indigo-50 text-indigo-700 border border-indigo-200',    icon: Send          },
+  viewed      : { label: 'Viewed',      pill: 'bg-amber-50 text-amber-700 border border-amber-200',       icon: Eye           },
+  followed_up : { label: 'Followed Up', pill: 'bg-orange-50 text-orange-700 border border-orange-200',    icon: MessageSquare },
+  accepted    : { label: 'Accepted',    pill: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: CheckCircle2  },
+  rejected    : { label: 'Rejected',    pill: 'bg-red-50 text-red-700 border border-red-200',             icon: XCircle       },
+  expired     : { label: 'Expired',     pill: 'bg-gray-50 text-gray-400 border border-gray-200',          icon: Clock         },
 }
 
 const RISK_CONFIG: Record<RiskLevel, { label: string; color: string }> = {
-  low     : { label: 'Low Risk',      color: 'text-emerald-600 bg-emerald-50 border border-emerald-200' },
-  medium  : { label: 'Medium Risk',   color: 'text-amber-600 bg-amber-50 border border-amber-200'       },
-  high    : { label: 'High Risk',     color: 'text-orange-600 bg-orange-50 border border-orange-200'    },
-  critical: { label: 'Critical',      color: 'text-red-700 bg-red-50 border border-red-200'             },
+  low     : { label: 'Low Risk',    color: 'text-emerald-600 bg-emerald-50 border border-emerald-200' },
+  medium  : { label: 'Medium Risk', color: 'text-amber-600 bg-amber-50 border border-amber-200'       },
+  high    : { label: 'High Risk',   color: 'text-orange-600 bg-orange-50 border border-orange-200'    },
+  critical: { label: 'Critical',    color: 'text-red-700 bg-red-50 border border-red-200'             },
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -194,7 +196,6 @@ function IntelligencePanel({
 }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-gray-50/80 border-b border-gray-100">
         <div className="flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-blue-600" />
@@ -213,13 +214,11 @@ function IntelligencePanel({
       </div>
 
       <div className="px-4 py-3 space-y-3">
-        {/* Urgency score */}
         <div>
           <p className="text-xs text-gray-400 mb-1 font-medium">URGENCY SCORE</p>
           <UrgencyBar score={urgency.urgencyScore} />
         </div>
 
-        {/* Key metrics grid */}
         <div className="grid grid-cols-2 gap-2">
           <div className="bg-gray-50 rounded-lg p-2.5">
             <p className="text-xs text-gray-400">Views</p>
@@ -244,7 +243,6 @@ function IntelligencePanel({
           </div>
         </div>
 
-        {/* AI recommendation */}
         {urgency.recommendation && (
           <div className="bg-blue-50 rounded-lg p-2.5 border border-blue-100">
             <p className="text-xs font-semibold text-blue-700 mb-0.5">Recommendation</p>
@@ -252,7 +250,6 @@ function IntelligencePanel({
           </div>
         )}
 
-        {/* Next action button */}
         <button
           onClick={() => onAction(urgency.nextAction, proposal.id)}
           className={`w-full flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-bold border transition-colors ${
@@ -284,14 +281,14 @@ function ProposalCard({
 }) {
   const [expanded, setExpanded] = useState(false)
 
-  const lead   = toLeadSnapshot(proposal.leads)
-  const snap   = toProposalSnapshot(proposal)
+  const lead    = toLeadSnapshot(proposal.leads)
+  const snap    = toProposalSnapshot(proposal)
   const urgency = computeProposalUrgency(snap, lead)
-  const temp   = proposal.leads?.lead_temperature
+  const temp    = proposal.leads?.lead_temperature
 
   const borderColor =
-    urgency.riskLevel === 'critical' ? 'border-l-red-500' :
-    urgency.riskLevel === 'high'     ? 'border-l-amber-500' :
+    urgency.riskLevel === 'critical' ? 'border-l-red-500'  :
+    urgency.riskLevel === 'high'     ? 'border-l-amber-500':
     urgency.riskLevel === 'medium'   ? 'border-l-blue-400' :
                                        'border-l-gray-200'
 
@@ -341,12 +338,10 @@ function ProposalCard({
           </div>
         </div>
 
-        {/* Urgency bar */}
         <div className="mb-2">
           <UrgencyBar score={urgency.urgencyScore} />
         </div>
 
-        {/* Quick metrics row */}
         <div className="flex items-center gap-3 text-xs text-gray-500">
           {proposal.sent_at && (
             <span className="flex items-center gap-1">
@@ -366,7 +361,7 @@ function ProposalCard({
         </div>
       </div>
 
-      {/* One-click action strip */}
+      {/* Action strip */}
       <div className="px-4 py-2 bg-gray-50/60 border-t border-gray-100 flex items-center gap-1.5 flex-wrap">
         <button
           onClick={() => onAction('send_via_whatsapp', proposal.id)}
@@ -400,8 +395,6 @@ function ProposalCard({
             <CheckCircle2 className="w-3 h-3" /> Mark Accepted
           </button>
         )}
-
-        {/* Expand toggle */}
         <button
           onClick={() => setExpanded((p) => !p)}
           className="ml-auto p-1 text-gray-400 hover:text-gray-600"
@@ -415,8 +408,6 @@ function ProposalCard({
       {expanded && (
         <div className="px-4 pb-4 pt-2 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
           <IntelligencePanel proposal={proposal} urgency={urgency} onAction={onAction} />
-
-          {/* AI content summary */}
           <div className="space-y-3">
             {proposal.ai_summary && (
               <div>
@@ -455,12 +446,12 @@ function ProposalCard({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ProposalsPage() {
-  const [proposals, setProposals]   = useState<ProposalWithLead[]>([])
-  const [loading, setLoading]       = useState(true)
-  const [filter, setFilter]         = useState<FilterTab>('all')
-  const [search, setSearch]         = useState('')
-  const [sortBy, setSortBy]         = useState<'urgency' | 'created' | 'value'>('urgency')
-  const [lastRefresh, setLastRefresh] = useState<Date>(new Date())
+  const [proposals,    setProposals]    = useState<ProposalWithLead[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [filter,       setFilter]       = useState<FilterTab>('all')
+  const [search,       setSearch]       = useState('')
+  const [sortBy,       setSortBy]       = useState<'urgency' | 'created' | 'value'>('urgency')
+  const [lastRefresh,  setLastRefresh]  = useState<Date>(new Date())
 
   const fetchProposals = useCallback(async () => {
     setLoading(true)
@@ -518,7 +509,7 @@ export default function ProposalsPage() {
     const u = computeProposalUrgency(toProposalSnapshot(p), toLeadSnapshot(p.leads))
     return u.followUpRequired || u.resendRecommended || u.escalationRequired
   }).length
-  const totalValue = proposals.reduce((s, p) => s + (p.total_price ?? 0), 0)
+  const totalValue    = proposals.reduce((s, p) => s + (p.total_price ?? 0), 0)
   const acceptedValue = proposals.filter((p) => p.status === 'accepted').reduce((s, p) => s + (p.total_price ?? 0), 0)
 
   // Filter + sort
@@ -546,17 +537,18 @@ export default function ProposalsPage() {
     })
 
   const FILTER_TABS: { id: FilterTab; label: string; count?: number }[] = [
-    { id: 'all',           label: 'All',           count: proposals.length     },
+    { id: 'all',           label: 'All',             count: proposals.length    },
     { id: 'action_needed', label: '⚡ Action Needed', count: actionNeededCount  },
-    { id: 'hot',           label: '🔥 HOT Leads'                               },
-    { id: 'viewed',        label: '👁 Viewed'                                  },
-    { id: 'sent',          label: '📤 Sent'                                    },
+    { id: 'hot',           label: '🔥 HOT Leads'                                },
+    { id: 'viewed',        label: '👁 Viewed'                                   },
+    { id: 'sent',          label: '📨 Sent'                                     },
     { id: 'accepted',      label: '✅ Accepted'                                 },
   ]
 
   return (
     <div className="min-h-screen bg-gray-50/60">
-      {/* Header */}
+
+      {/* ── Header ── */}
       <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3">
         <div className="max-w-screen-xl mx-auto flex items-center justify-between gap-4">
           <div>
@@ -584,18 +576,26 @@ export default function ProposalsPage() {
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
             </button>
+            {/* ── NEW PROPOSAL BUTTON ── */}
+            <Link
+              href="/proposals/new"
+              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" /> New Proposal
+            </Link>
           </div>
         </div>
       </header>
 
       <div className="max-w-screen-xl mx-auto px-6 py-5 space-y-5">
-        {/* KPI strip */}
+
+        {/* ── KPI strip ── */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { label: 'Total Proposals', value: proposals.length,          icon: FileText,    color: 'bg-gray-100 text-gray-600' },
-            { label: 'Action Needed',   value: actionNeededCount,          icon: AlertTriangle, color: 'bg-red-100 text-red-600' },
-            { label: 'Pipeline Value',  value: formatINR(totalValue),      icon: TrendingUp,  color: 'bg-blue-100 text-blue-600' },
-            { label: 'Won Revenue',     value: formatINR(acceptedValue),   icon: CheckCircle2, color: 'bg-emerald-100 text-emerald-600' },
+            { label: 'Total Proposals', value: proposals.length,        icon: FileText,      color: 'bg-gray-100 text-gray-600'    },
+            { label: 'Action Needed',   value: actionNeededCount,        icon: AlertTriangle, color: 'bg-red-100 text-red-600'      },
+            { label: 'Pipeline Value',  value: formatINR(totalValue),    icon: TrendingUp,    color: 'bg-blue-100 text-blue-600'    },
+            { label: 'Won Revenue',     value: formatINR(acceptedValue), icon: CheckCircle2,  color: 'bg-emerald-100 text-emerald-600' },
           ].map((card) => (
             <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-start justify-between mb-2">
@@ -607,7 +607,7 @@ export default function ProposalsPage() {
           ))}
         </div>
 
-        {/* Filters + search */}
+        {/* ── Filters + search ── */}
         <div className="bg-white rounded-2xl border border-gray-200 px-4 py-3">
           <div className="flex flex-wrap items-center gap-1.5 mb-3">
             {FILTER_TABS.map((f) => (
@@ -618,7 +618,9 @@ export default function ProposalsPage() {
               >
                 {f.label}
                 {f.count !== undefined && (
-                  <span className={`px-1.5 py-0.5 rounded-full text-xs font-bold ${filter === f.id ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>{f.count}</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-xs font-bold ${filter === f.id ? 'bg-white/25 text-white' : 'bg-gray-200 text-gray-500'}`}>
+                    {f.count}
+                  </span>
                 )}
               </button>
             ))}
@@ -626,9 +628,13 @@ export default function ProposalsPage() {
           <div className="flex items-center gap-2 flex-wrap">
             <div className="relative">
               <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-gray-400" />
-              <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
                 placeholder="Client, phone, event..."
-                className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs w-44 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50" />
+                className="pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-xs w-44 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-gray-50"
+              />
             </div>
             <div className="flex items-center gap-1.5 ml-auto">
               <Filter className="w-3.5 h-3.5 text-gray-400" />
@@ -645,7 +651,7 @@ export default function ProposalsPage() {
           </div>
         </div>
 
-        {/* Proposal cards */}
+        {/* ── Proposal cards ── */}
         {loading ? (
           <div className="flex justify-center py-16">
             <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
@@ -654,7 +660,12 @@ export default function ProposalsPage() {
           <div className="text-center py-16 bg-white rounded-2xl border border-gray-200">
             <FileText className="w-10 h-10 text-gray-300 mx-auto mb-3" />
             <p className="text-sm font-semibold text-gray-500">No proposals match the current filter</p>
-            <button onClick={() => { setFilter('all'); setSearch('') }} className="mt-3 text-xs text-blue-600 hover:underline">Clear filters</button>
+            <button
+              onClick={() => { setFilter('all'); setSearch('') }}
+              className="mt-3 text-xs text-blue-600 hover:underline"
+            >
+              Clear filters
+            </button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -674,6 +685,7 @@ export default function ProposalsPage() {
             {displayed.length} of {proposals.length} proposals · {formatINR(displayed.reduce((s, p) => s + (p.total_price ?? 0), 0))} total value
           </p>
         )}
+
       </div>
     </div>
   )

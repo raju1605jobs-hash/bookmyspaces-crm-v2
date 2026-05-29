@@ -2,37 +2,42 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import {
-  RefreshCw, Phone, Calendar, Users, Star, ChevronRight,
-  Plus, MoreVertical, Brain, Send
-, Clock, AlarmClock, FileText, Sparkles, Activity} from 'lucide-react'
+  RefreshCw, Phone, Calendar, Users, Star,
+  Brain, FileText, Sparkles, Clock, AlarmClock,
+} from 'lucide-react'
 import { format, parseISO } from 'date-fns'
 
-const PIPELINE: Array<{ status: any; label: string; color: string; bg: string }> = [
-  { status: 'new_inquiry',       label: 'New Inquiry',      color: '#2563eb', bg: '#eff6ff' },
-  { status: 'followup_pending',  label: 'Follow-up',        color: '#d97706', bg: '#fffbeb' },
-  { status: 'proposal_sent',     label: 'Proposal Sent',    color: '#7c3aed', bg: '#f5f3ff' },
-  { status: 'negotiation',       label: 'Negotiation',      color: '#ea580c', bg: '#fff7ed' },
-  { status: 'confirmed',         label: 'Confirmed ✓',      color: '#16a34a', bg: '#f0fdf4' },
-  { status: 'future_prospect',   label: 'Future Prospect',  color: '#4b5563', bg: '#f9fafb' },
+// ─── Pipeline config ──────────────────────────────────────────────────────────
+
+const PIPELINE: Array<{ status: string; label: string; color: string; bg: string }> = [
+  { status: 'new_inquiry',      label: 'New Inquiry',     color: '#2563eb', bg: '#eff6ff' },
+  { status: 'followup_pending', label: 'Follow-up',       color: '#d97706', bg: '#fffbeb' },
+  { status: 'proposal_sent',    label: 'Proposal Sent',   color: '#7c3aed', bg: '#f5f3ff' },
+  { status: 'negotiation',      label: 'Negotiation',     color: '#ea580c', bg: '#fff7ed' },
+  { status: 'confirmed',        label: 'Confirmed ✓',     color: '#16a34a', bg: '#f0fdf4' },
+  { status: 'future_prospect',  label: 'Future Prospect', color: '#4b5563', bg: '#f9fafb' },
 ]
 
+// ─── Main page ────────────────────────────────────────────────────────────────
+
 export default function KanbanPage() {
-  const [leads, setLeads] = useState<any[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [draggedId, setDraggedId] = useState<string | null>(null)
-  const [selectedLead, setSelectedLead] = useState<any | null>(null)
-  const [leadContext, setLeadContext] = useState<{activities: any[], proposals: any[], summary: any} | null>(null)
-  const [isLoadingContext, setIsLoadingContext] = useState(false)
+  const [leads,               setLeads]               = useState<any[]>([])
+  const [isLoading,           setIsLoading]           = useState(true)
+  const [draggedId,           setDraggedId]           = useState<string | null>(null)
+  const [selectedLead,        setSelectedLead]        = useState<any | null>(null)
+  const [leadContext,         setLeadContext]         = useState<{ activities: any[]; proposals: any[]; summary: any } | null>(null)
+  const [isLoadingContext,    setIsLoadingContext]    = useState(false)
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false)
-  const [isScoringAll, setIsScoringAll] = useState(false)
-  const [scoreResult, setScoreResult] = useState<string | null>(null)
+  const [isScoringAll,        setIsScoringAll]        = useState(false)
+  const [scoreResult,         setScoreResult]         = useState<string | null>(null)
+
+  // ── Data fetching ────────────────────────────────────────────────────────
 
   const fetchLeads = useCallback(async () => {
     setIsLoading(true)
     try {
-      const res = await fetch('/api/leads?limit=200')
+      const res  = await fetch('/api/leads?limit=200')
       const data = await res.json()
-      // Normalize legacy "new" status to "new_inquiry"
       const normalized = (data.leads || []).map((l: any) =>
         l.status === 'new' ? { ...l, status: 'new_inquiry' } : l
       )
@@ -44,12 +49,14 @@ export default function KanbanPage() {
 
   useEffect(() => { fetchLeads() }, [fetchLeads])
 
-  const updateStatus = async (id: string, status: any) => {
+  // ── Actions ──────────────────────────────────────────────────────────────
+
+  const updateStatus = async (id: string, status: string) => {
     setLeads(prev => prev.map(l => l.id === id ? { ...l, status } : l))
     await fetch('/api/leads', {
-      method: 'PATCH',
+      method : 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, status }),
+      body   : JSON.stringify({ id, status }),
     })
   }
 
@@ -57,10 +64,10 @@ export default function KanbanPage() {
     setIsScoringAll(true)
     setScoreResult(null)
     try {
-      const res = await fetch('/api/analytics', {
-        method: 'POST',
+      const res  = await fetch('/api/analytics', {
+        method : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'score_leads' }),
+        body   : JSON.stringify({ action: 'score_leads' }),
       })
       const data = await res.json()
       setScoreResult(`✅ AI scored ${data.scored} leads`)
@@ -72,22 +79,43 @@ export default function KanbanPage() {
     }
   }
 
-  const leadsByStatus = (status: any) =>
-    leads.filter(l => l.status === status)
+  // ── Drag & drop ──────────────────────────────────────────────────────────
+
+  const leadsByStatus = (status: string) =>
+    leads
+      .filter(l => l.status === status)
       .sort((a, b) => (b.ai_score || b.lead_score || 5) - (a.ai_score || a.lead_score || 5))
 
-  const handleDragStart = (id: string) => setDraggedId(id)
-  const handleDragOver = (e: React.DragEvent) => e.preventDefault()
-  const handleDrop = (status: any) => {
+  const handleDragOver  = (e: React.DragEvent) => e.preventDefault()
+  const handleDrop      = (status: string) => {
     if (draggedId) updateStatus(draggedId, status)
     setDraggedId(null)
   }
 
+  // ── Proposal link builder ────────────────────────────────────────────────
+
+  function proposalHref(lead: any): string {
+    const p = new URLSearchParams({
+      lead_id: lead.id,
+      name   : lead.name     || '',
+      phone  : lead.phone    || '',
+      event  : lead.event_type || '',
+      guests : String(lead.guest_count || ''),
+      date   : lead.event_date || '',
+    })
+    return `/proposals/new?${p.toString()}`
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen" style={{ background: 'var(--cream)', fontFamily: 'var(--font-body)' }}>
-      {/* Nav */}
-      <nav className="sticky top-0 z-40 px-6 py-4 flex items-center justify-between"
-        style={{ background: 'rgba(248,245,240,0.95)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--border)' }}>
+
+      {/* ── Navigation ── */}
+      <nav
+        className="sticky top-0 z-40 px-6 py-4 flex items-center justify-between"
+        style={{ background: 'rgba(248,245,240,0.95)', backdropFilter: 'blur(12px)', borderBottom: '1px solid var(--border)' }}
+      >
         <div className="flex items-center gap-4">
           <div className="text-xl font-light" style={{ fontFamily: 'var(--font-display)', color: 'var(--charcoal)' }}>
             BookMySpaces <span className="text-sm" style={{ color: 'var(--gold)' }}>Kanban</span>
@@ -96,53 +124,78 @@ export default function KanbanPage() {
             {leads.length} leads · Drag to move stages
           </span>
         </div>
+
         <div className="flex items-center gap-2">
-          <button onClick={scoreAllLeads} disabled={isScoringAll}
+          <button
+            onClick={scoreAllLeads}
+            disabled={isScoringAll}
             className="flex items-center gap-2 text-sm px-3 py-2 rounded-lg disabled:opacity-50"
-            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}>
+            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}
+          >
             {isScoringAll ? <RefreshCw size={13} className="animate-spin" /> : <Brain size={13} />}
             AI Score All
           </button>
-          <button onClick={fetchLeads} className="p-2 rounded-lg hover:bg-white">
+
+          <button
+            onClick={fetchLeads}
+            className="p-2 rounded-lg hover:bg-white"
+          >
             <RefreshCw size={15} style={{ color: 'var(--slate)' }} className={isLoading ? 'animate-spin' : ''} />
           </button>
-          <a href="/proposals" className="text-sm px-4 py-2 rounded-lg text-white"
-            style={{ background: 'linear-gradient(135deg, #c9a84c, #a07a28)' }}>
+
+          {/* ✅ FIXED: routes to /proposals/new */}
+          <a
+            href="/proposals/new"
+            className="text-sm px-4 py-2 rounded-lg text-white"
+            style={{ background: 'var(--charcoal)' }}
+          >
             + New Proposal
           </a>
-          <a href="/dashboard" className="text-sm px-3 py-2 rounded-lg"
-            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}>
+
+          <a
+            href="/dashboard"
+            className="text-sm px-3 py-2 rounded-lg"
+            style={{ border: '1px solid var(--border)', background: 'white', color: 'var(--slate)' }}
+          >
             ← List View
           </a>
         </div>
       </nav>
 
+      {/* ── Score result toast ── */}
       {scoreResult && (
-        <div className="mx-6 mt-4 px-4 py-2 rounded-lg text-sm"
-          style={{ background: '#f0fdf4', color: '#16a34a', border: '1px solid #86efac' }}>
+        <div
+          className="mx-6 mt-4 px-4 py-2 rounded-lg text-sm"
+          style={{ background: '#f0fdf4', color: '#16a34a', border: '1px solid #86efac' }}
+        >
           {scoreResult}
         </div>
       )}
 
-      {/* Kanban Board */}
+      {/* ── Kanban board ── */}
       <div className="p-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
           {PIPELINE.map(col => {
             const colLeads = leadsByStatus(col.status)
             return (
-              <div key={col.status}
+              <div
+                key={col.status}
                 className="w-72 flex-shrink-0 rounded-2xl overflow-hidden"
                 style={{ background: 'white', border: '1px solid var(--border)' }}
                 onDragOver={handleDragOver}
-                onDrop={() => handleDrop(col.status)}>
-
-                {/* Column Header */}
-                <div className="px-4 py-3 flex items-center justify-between"
-                  style={{ background: col.bg, borderBottom: `2px solid ${col.color}20` }}>
+                onDrop={() => handleDrop(col.status)}
+              >
+                {/* Column header */}
+                <div
+                  className="px-4 py-3 flex items-center justify-between"
+                  style={{ background: col.bg, borderBottom: `2px solid ${col.color}20` }}
+                >
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm" style={{ color: col.color }}>{col.label}</span>
-                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold"
-                      style={{ background: col.color, color: 'white' }}>
+                    <span
+                      className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                      style={{ background: col.color, color: 'white' }}
+                    >
                       {colLeads.length}
                     </span>
                   </div>
@@ -160,7 +213,7 @@ export default function KanbanPage() {
                       key={lead.id}
                       lead={lead}
                       accentColor={col.color}
-                      onDragStart={() => handleDragStart(lead.id)}
+                      onDragStart={() => setDraggedId(lead.id)}
                       onClick={() => setSelectedLead(lead)}
                     />
                   ))}
@@ -171,13 +224,17 @@ export default function KanbanPage() {
         </div>
       </div>
 
-      {/* any Detail Panel */}
+      {/* ── Detail panel ── */}
       {selectedLead && (
         <>
           <div className="fixed inset-0 bg-black/20 z-40" onClick={() => setSelectedLead(null)} />
-          <div className="fixed inset-y-0 right-0 w-96 z-50 overflow-y-auto shadow-2xl"
-            style={{ background: 'white', borderLeft: '1px solid var(--border)' }}>
+          <div
+            className="fixed inset-y-0 right-0 w-96 z-50 overflow-y-auto shadow-2xl"
+            style={{ background: 'white', borderLeft: '1px solid var(--border)' }}
+          >
             <div className="p-6">
+
+              {/* Header */}
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-light" style={{ fontFamily: 'var(--font-display)' }}>
                   {selectedLead.name || 'Unknown Guest'}
@@ -187,14 +244,19 @@ export default function KanbanPage() {
 
               {/* AI Score */}
               {(selectedLead.ai_score || selectedLead.lead_score) && (
-                <div className="mb-4 p-4 rounded-xl"
-                  style={{ background: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.2)' }}>
+                <div
+                  className="mb-4 p-4 rounded-xl"
+                  style={{ background: 'rgba(201,168,76,0.08)', border: '1px solid rgba(201,168,76,0.2)' }}
+                >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs uppercase tracking-wider" style={{ color: 'var(--gold)' }}>AI any Score</span>
+                    <span className="text-xs uppercase tracking-wider" style={{ color: 'var(--gold)' }}>AI Score</span>
                     <div className="flex gap-0.5">
                       {Array.from({ length: 10 }).map((_, i) => (
-                        <div key={i} className="w-3 h-3 rounded-sm"
-                          style={{ background: i < (selectedLead.ai_score || selectedLead.lead_score || 5) ? '#c9a84c' : '#e8e4de' }} />
+                        <div
+                          key={i}
+                          className="w-3 h-3 rounded-sm"
+                          style={{ background: i < (selectedLead.ai_score || selectedLead.lead_score || 5) ? '#c9a84c' : '#e8e4de' }}
+                        />
                       ))}
                     </div>
                   </div>
@@ -207,12 +269,18 @@ export default function KanbanPage() {
                 </div>
               )}
 
+              {/* Lead details */}
               <div className="space-y-3 text-sm">
                 {selectedLead.phone && (
                   <div className="flex items-center justify-between">
                     <span style={{ color: 'var(--muted)' }}>Phone</span>
-                    <a href={`https://wa.me/91${selectedLead.phone}`} target="_blank" rel="noopener noreferrer"
-                      className="flex items-center gap-1 font-medium" style={{ color: '#25D366' }}>
+                    <a
+                      href={`https://wa.me/91${selectedLead.phone}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-1 font-medium"
+                      style={{ color: '#25D366' }}
+                    >
                       <Phone size={12} /> {selectedLead.phone}
                     </a>
                   </div>
@@ -245,71 +313,94 @@ export default function KanbanPage() {
                 )}
               </div>
 
+              {/* Action buttons */}
               <div className="mt-6 space-y-2">
                 {selectedLead.phone && (
-                  <a href={`https://wa.me/91${selectedLead.phone}?text=Hi ${selectedLead.name || 'there'}! Following up on your event inquiry 😊`}
-                    target="_blank" rel="noopener noreferrer"
+                  <a
+                    href={`https://wa.me/91${selectedLead.phone}?text=Hi ${selectedLead.name || 'there'}! Following up on your event inquiry 😊`}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="block w-full text-center py-2.5 rounded-lg text-white text-sm font-medium"
-                    style={{ background: '#25D366' }}>
+                    style={{ background: '#25D366' }}
+                  >
                     WhatsApp Follow-up
                   </a>
                 )}
-                <a href={`/proposals?lead_id=${selectedLead.id}&name=${encodeURIComponent(selectedLead.name || '')}&phone=${selectedLead.phone || ''}&event=${encodeURIComponent(selectedLead.event_type || '')}&guests=${selectedLead.guest_count || ''}&date=${selectedLead.event_date || ''}`}
+
+                {/* ✅ FIXED: routes to /proposals/new with pre-filled querystring */}
+                <a
+                  href={proposalHref(selectedLead)}
                   className="block w-full text-center py-2.5 rounded-lg text-sm font-medium border"
-                  style={{ borderColor: 'var(--gold)', color: 'var(--gold)', background: 'rgba(201,168,76,0.06)' }}>
+                  style={{ borderColor: 'var(--gold)', color: 'var(--gold)', background: 'rgba(201,168,76,0.06)' }}
+                >
                   Create Proposal
                 </a>
+
+                {/* Stage quick-move buttons */}
                 <div className="flex gap-2">
-                  {PIPELINE.filter(p => p.status !== selectedLead.status).slice(0, 2).map(p => (
-                    <button key={p.status}
-                      onClick={() => { updateStatus(selectedLead.id, p.status); setSelectedLead({ ...selectedLead, status: p.status }) }}
-                      className="flex-1 py-2 rounded-lg text-xs font-medium"
-                      style={{ background: p.bg, color: p.color, border: `1px solid ${p.color}30` }}>
-                      → {p.label}
-                    </button>
-                  ))}
+                  {PIPELINE
+                    .filter(p => p.status !== selectedLead.status)
+                    .slice(0, 2)
+                    .map(p => (
+                      <button
+                        key={p.status}
+                        onClick={() => {
+                          updateStatus(selectedLead.id, p.status)
+                          setSelectedLead({ ...selectedLead, status: p.status })
+                        }}
+                        className="flex-1 py-2 rounded-lg text-xs font-medium"
+                        style={{ background: p.bg, color: p.color, border: `1px solid ${p.color}30` }}
+                      >
+                        → {p.label}
+                      </button>
+                    ))
+                  }
                 </div>
               </div>
 
-              {/* ── Follow-up Scheduler ── */}
+              {/* ── Follow-up scheduler ── */}
               <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
-                <p className="text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--slate)' }}>Schedule Follow-up</p>
+                <p className="text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--slate)' }}>
+                  Schedule Follow-up
+                </p>
                 <div className="flex gap-2">
                   <input
                     type="datetime-local"
                     id="kfup-date"
                     className="flex-1 text-xs px-2 py-1.5 rounded-lg border"
                     style={{ borderColor: 'var(--border)', color: 'var(--charcoal)' }}
-                    defaultValue={(selectedLead as any).followup_date ? (selectedLead as any).followup_date.slice(0, 16) : ''}
+                    defaultValue={selectedLead.followup_date ? selectedLead.followup_date.slice(0, 16) : ''}
                   />
                   <button
                     onClick={async () => {
                       const val = (document.getElementById('kfup-date') as HTMLInputElement)?.value
                       if (!val) return
                       await fetch('/api/followups', {
-                        method: 'POST',
+                        method : 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'schedule', lead_id: selectedLead.id, followup_date: val }),
+                        body   : JSON.stringify({ action: 'schedule', lead_id: selectedLead.id, followup_date: val }),
                       })
-                      setSelectedLead({ ...selectedLead, followup_date: val } as any)
+                      setSelectedLead({ ...selectedLead, followup_date: val })
                     }}
                     className="text-xs px-3 py-1.5 rounded-lg text-white"
-                    style={{ background: 'var(--gold)' }}>
+                    style={{ background: 'var(--gold)' }}
+                  >
                     Set
                   </button>
                 </div>
-                {(selectedLead as any).followup_date && (
+                {selectedLead.followup_date && (
                   <button
                     onClick={async () => {
                       await fetch('/api/followups', {
-                        method: 'POST',
+                        method : 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'complete', lead_id: selectedLead.id }),
+                        body   : JSON.stringify({ action: 'complete', lead_id: selectedLead.id }),
                       })
-                      setSelectedLead({ ...selectedLead, followup_date: null } as any)
+                      setSelectedLead({ ...selectedLead, followup_date: null })
                     }}
                     className="mt-1 text-xs w-full py-1 rounded-lg"
-                    style={{ border: '1px solid #86efac', color: '#16a34a', background: '#f0fdf4' }}>
+                    style={{ border: '1px solid #86efac', color: '#16a34a', background: '#f0fdf4' }}
+                  >
                     ✓ Mark Complete
                   </button>
                 )}
@@ -318,30 +409,34 @@ export default function KanbanPage() {
               {/* ── AI Intelligence Summary ── */}
               <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--slate)' }}>AI Intelligence</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--slate)' }}>
+                    AI Intelligence
+                  </p>
                   <button
                     onClick={async () => {
-                      if (!selectedLead) return
                       setIsGeneratingSummary(true)
                       try {
                         const res = await fetch('/api/leads/summary', {
-                          method: 'POST',
+                          method : 'POST',
                           headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({ lead_id: selectedLead.id }),
+                          body   : JSON.stringify({ lead_id: selectedLead.id }),
                         })
                         if (res.ok) {
                           const d = await res.json()
                           setLeadContext(prev => ({ ...(prev || { activities: [], proposals: [] }), summary: d.summary }))
                         }
-                      } catch {} finally { setIsGeneratingSummary(false) }
+                      } catch {}
+                      finally { setIsGeneratingSummary(false) }
                     }}
                     disabled={isGeneratingSummary}
                     className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg disabled:opacity-50"
-                    style={{ background: 'rgba(201,168,76,0.1)', color: 'var(--gold-dark)', border: '1px solid rgba(201,168,76,0.3)' }}>
+                    style={{ background: 'rgba(201,168,76,0.1)', color: 'var(--gold-dark)', border: '1px solid rgba(201,168,76,0.3)' }}
+                  >
                     {isGeneratingSummary ? <RefreshCw size={10} className="animate-spin" /> : <Sparkles size={10} />}
-                    {isGeneratingSummary ? 'Analysing...' : 'Analyse any'}
+                    {isGeneratingSummary ? 'Analysing...' : 'Analyse'}
                   </button>
                 </div>
+
                 {leadContext?.summary && (
                   <div className="space-y-2 text-xs">
                     {leadContext.summary.summary && (
@@ -349,10 +444,17 @@ export default function KanbanPage() {
                     )}
                     <div className="flex flex-wrap gap-1 mt-2">
                       {leadContext.summary.lead_quality && (
-                        <span className="px-2 py-0.5 rounded-full"
-                          style={{ background: leadContext.summary.lead_quality === 'hot' ? '#fef2f2' : leadContext.summary.lead_quality === 'warm' ? '#fffbeb' : '#f0f9ff',
-                                   color: leadContext.summary.lead_quality === 'hot' ? '#dc2626' : leadContext.summary.lead_quality === 'warm' ? '#d97706' : '#0369a1' }}>
-                          {leadContext.summary.lead_quality === 'hot' ? '🔥' : leadContext.summary.lead_quality === 'warm' ? '⚡' : '❄️'} {leadContext.summary.lead_quality}
+                        <span
+                          className="px-2 py-0.5 rounded-full"
+                          style={{
+                            background: leadContext.summary.lead_quality === 'hot' ? '#fef2f2'
+                                      : leadContext.summary.lead_quality === 'warm' ? '#fffbeb' : '#f0f9ff',
+                            color     : leadContext.summary.lead_quality === 'hot' ? '#dc2626'
+                                      : leadContext.summary.lead_quality === 'warm' ? '#d97706' : '#0369a1',
+                          }}
+                        >
+                          {leadContext.summary.lead_quality === 'hot' ? '🔥'
+                            : leadContext.summary.lead_quality === 'warm' ? '⚡' : '❄️'} {leadContext.summary.lead_quality}
                         </span>
                       )}
                       {leadContext.summary.urgency && (
@@ -362,14 +464,18 @@ export default function KanbanPage() {
                       )}
                     </div>
                     {leadContext.summary.recommended_action && (
-                      <p className="mt-2 px-2 py-1.5 rounded-lg text-xs" style={{ background: 'rgba(201,168,76,0.08)', color: 'var(--charcoal)', borderLeft: '3px solid var(--gold)' }}>
+                      <p
+                        className="mt-2 px-2 py-1.5 rounded-lg text-xs"
+                        style={{ background: 'rgba(201,168,76,0.08)', color: 'var(--charcoal)', borderLeft: '3px solid var(--gold)' }}
+                      >
                         Next: {leadContext.summary.recommended_action}
                       </p>
                     )}
                   </div>
                 )}
-                {!(leadContext?.summary) && (selectedLead as any).inquiry_summary && (
-                  <p className="text-xs" style={{ color: 'var(--muted)' }}>{(selectedLead as any).inquiry_summary}</p>
+
+                {!leadContext?.summary && selectedLead.inquiry_summary && (
+                  <p className="text-xs" style={{ color: 'var(--muted)' }}>{selectedLead.inquiry_summary}</p>
                 )}
               </div>
 
@@ -379,14 +485,22 @@ export default function KanbanPage() {
                   <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--slate)' }}>Proposals</p>
                   <div className="space-y-1">
                     {(leadContext?.proposals || []).map((p: any) => (
-                      <div key={p.id} className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg" style={{ background: '#f5f3ff' }}>
+                      <div
+                        key={p.id}
+                        className="flex items-center justify-between text-xs py-1.5 px-2 rounded-lg"
+                        style={{ background: '#f5f3ff' }}
+                      >
                         <div>
                           <span className="font-medium" style={{ color: '#7c3aed' }}>{p.proposal_number}</span>
                           <span className="ml-1" style={{ color: 'var(--muted)' }}>{p.package_name}</span>
                         </div>
-                        <span className="px-1.5 py-0.5 rounded-full"
-                          style={{ background: p.status === 'accepted' ? '#f0fdf4' : '#f5f3ff',
-                                   color: p.status === 'accepted' ? '#16a34a' : '#7c3aed' }}>
+                        <span
+                          className="px-1.5 py-0.5 rounded-full"
+                          style={{
+                            background: p.status === 'accepted' ? '#f0fdf4' : '#f5f3ff',
+                            color     : p.status === 'accepted' ? '#16a34a' : '#7c3aed',
+                          }}
+                        >
                           {p.status}
                         </span>
                       </div>
@@ -395,28 +509,39 @@ export default function KanbanPage() {
                 </div>
               )}
 
-              {/* ── Activity Timeline ── */}
+              {/* ── Activity timeline ── */}
               {isLoadingContext && (
                 <div className="mt-4 border-t pt-3 text-center text-xs" style={{ borderColor: 'var(--border)', color: 'var(--muted)' }}>
-                  <RefreshCw size={11} className="animate-spin inline mr-1" />Loading...
+                  <RefreshCw size={11} className="animate-spin inline mr-1" /> Loading...
                 </div>
               )}
+
               {!isLoadingContext && (leadContext?.activities?.length ?? 0) > 0 && (
                 <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
-                  <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--slate)' }}>Activity Timeline</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--slate)' }}>
+                    Activity Timeline
+                  </p>
                   <div className="space-y-2.5 max-h-44 overflow-y-auto pr-1">
                     {(leadContext?.activities || []).map((a: any) => (
                       <div key={a.id} className="flex gap-2 text-xs">
-                        <div className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
-                          style={{ background: a.action === 'proposal_created' ? '#7c3aed'
-                                              : a.action === 'followup_completed' ? '#16a34a'
-                                              : a.action === 'note_added' ? '#0369a1'
-                                              : a.action === 'ai_summary_generated' ? '#c9a84c'
-                                              : '#d1d5db' }} />
+                        <div
+                          className="w-1.5 h-1.5 rounded-full mt-1.5 flex-shrink-0"
+                          style={{
+                            background: a.action === 'proposal_created'     ? '#7c3aed'
+                                      : a.action === 'followup_completed'   ? '#16a34a'
+                                      : a.action === 'note_added'           ? '#0369a1'
+                                      : a.action === 'ai_summary_generated' ? '#c9a84c'
+                                      : '#d1d5db',
+                          }}
+                        />
                         <div>
                           <p style={{ color: 'var(--charcoal)' }}>{a.description}</p>
                           <p style={{ color: 'var(--muted)' }}>
-                            {new Date(a.created_at).toLocaleString('en-IN', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit', timeZone:'Asia/Kolkata' })}
+                            {new Date(a.created_at).toLocaleString('en-IN', {
+                              day: '2-digit', month: 'short',
+                              hour: '2-digit', minute: '2-digit',
+                              timeZone: 'Asia/Kolkata',
+                            })}
                           </p>
                         </div>
                       </div>
@@ -425,9 +550,11 @@ export default function KanbanPage() {
                 </div>
               )}
 
-              {/* ── Add Note ── */}
+              {/* ── Add note ── */}
               <div className="mt-4 border-t pt-4" style={{ borderColor: 'var(--border)' }}>
-                <p className="text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--slate)' }}>Add Note</p>
+                <p className="text-xs font-semibold mb-2 uppercase tracking-wider" style={{ color: 'var(--slate)' }}>
+                  Add Note
+                </p>
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -439,12 +566,12 @@ export default function KanbanPage() {
                       if (e.key !== 'Enter') return
                       const val = (e.target as HTMLInputElement).value.trim()
                       if (!val) return
-                      const res = await fetch('/api/followups', {
-                        method: 'POST',
+                      await fetch('/api/followups', {
+                        method : 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'note', lead_id: selectedLead.id, note: val }),
+                        body   : JSON.stringify({ action: 'note', lead_id: selectedLead.id, note: val }),
                       })
-                      if (res.ok) (e.target as HTMLInputElement).value = ''
+                      ;(e.target as HTMLInputElement).value = ''
                     }}
                   />
                   <button
@@ -452,23 +579,26 @@ export default function KanbanPage() {
                       const inp = document.getElementById('kfup-note') as HTMLInputElement
                       const val = inp?.value.trim()
                       if (!val) return
-                      const res = await fetch('/api/followups', {
-                        method: 'POST',
+                      await fetch('/api/followups', {
+                        method : 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ action: 'note', lead_id: selectedLead.id, note: val }),
+                        body   : JSON.stringify({ action: 'note', lead_id: selectedLead.id, note: val }),
                       })
-                      if (res.ok) inp.value = ''
+                      inp.value = ''
                     }}
                     className="text-xs px-3 py-1.5 rounded-lg text-white"
-                    style={{ background: 'var(--charcoal)' }}>
+                    style={{ background: 'var(--charcoal)' }}
+                  >
                     Save
                   </button>
                 </div>
               </div>
 
+              {/* Footer */}
               <div className="mt-4 text-xs" style={{ color: 'var(--muted)' }}>
                 Created {format(parseISO(selectedLead.created_at), 'dd MMM yyyy, HH:mm')} · {selectedLead.source}
               </div>
+
             </div>
           </div>
         </>
@@ -477,26 +607,34 @@ export default function KanbanPage() {
   )
 }
 
+// ─── Lead card ────────────────────────────────────────────────────────────────
+
 function LeadCard({
-  lead, accentColor, onDragStart, onClick
+  lead, accentColor, onDragStart, onClick,
 }: {
-  lead: any
+  lead       : any
   accentColor: string
   onDragStart: () => void
-  onClick: () => void
+  onClick    : () => void
 }) {
-  const score = lead.ai_score || lead.lead_score || 5
+  const score      = lead.ai_score || lead.lead_score || 5
   const scoreColor = score >= 8 ? '#16a34a' : score >= 5 ? '#d97706' : '#dc2626'
-  const hasProposal = !!(lead as any).proposal_sent_at
+  const hasProposal = !!lead.proposal_sent_at
+
+  const now     = new Date()
+  const fDate   = lead.followup_date ? new Date(lead.followup_date) : null
+  const isOverdue  = fDate && fDate < now
+  const isDueToday = fDate && !isOverdue && fDate.toDateString() === now.toDateString()
 
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onClick={onClick}
-      className="p-3 rounded-xl cursor-grab active:cursor-grabbing card-hover"
+      className="p-3 rounded-xl cursor-grab active:cursor-grabbing"
       style={{ background: 'var(--cream)', border: '1px solid var(--border)', borderLeft: `3px solid ${accentColor}` }}
     >
+      {/* Name + score */}
       <div className="flex items-start justify-between mb-2">
         <div>
           <p className="font-medium text-sm" style={{ color: 'var(--charcoal)' }}>
@@ -506,40 +644,44 @@ function LeadCard({
             <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>{lead.phone}</p>
           )}
         </div>
-        <div className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full"
-          style={{ background: `${scoreColor}15`, color: scoreColor }}>
-          <Star size={9} />
-          {score}
+        <div
+          className="flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full"
+          style={{ background: `${scoreColor}15`, color: scoreColor }}
+        >
+          <Star size={9} /> {score}
         </div>
       </div>
 
-      {/* Follow-up indicators */}
-      {(() => {
-        const now = new Date()
-        const fDate = (lead as any).followup_date ? new Date((lead as any).followup_date) : null
-        const isOverdue = fDate && fDate < now
-        const isDueToday = fDate && !isOverdue && fDate.toDateString() === now.toDateString()
-        if (!fDate) return null
-        return (
-          <div className="mb-2 flex items-center gap-1 text-xs px-2 py-0.5 rounded-full w-fit"
-            style={{
-              background: isOverdue ? '#fef2f2' : isDueToday ? '#fffbeb' : '#f0fdf4',
-              color: isOverdue ? '#dc2626' : isDueToday ? '#d97706' : '#16a34a',
-              border: `1px solid ${isOverdue ? '#fca5a5' : isDueToday ? '#fcd34d' : '#86efac'}`
-            }}>
-            {isOverdue ? <AlarmClock size={9} /> : <Clock size={9} />}
-            {isOverdue ? 'Overdue' : isDueToday ? 'Due today' : new Date((lead as any).followup_date).toLocaleDateString('en-IN', {day:'2-digit',month:'short'})}
-          </div>
-        )
-      })()}
+      {/* Follow-up badge */}
+      {fDate && (
+        <div
+          className="mb-2 flex items-center gap-1 text-xs px-2 py-0.5 rounded-full w-fit"
+          style={{
+            background: isOverdue ? '#fef2f2' : isDueToday ? '#fffbeb' : '#f0fdf4',
+            color     : isOverdue ? '#dc2626' : isDueToday ? '#d97706' : '#16a34a',
+            border    : `1px solid ${isOverdue ? '#fca5a5' : isDueToday ? '#fcd34d' : '#86efac'}`,
+          }}
+        >
+          {isOverdue ? <AlarmClock size={9} /> : <Clock size={9} />}
+          {isOverdue
+            ? 'Overdue'
+            : isDueToday
+            ? 'Due today'
+            : new Date(lead.followup_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+        </div>
+      )}
 
+      {/* Proposal sent badge */}
       {hasProposal && (
-        <div className="mb-1 inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full"
-          style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}>
+        <div
+          className="mb-1 inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full"
+          style={{ background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe' }}
+        >
           <FileText size={8} /> Proposal sent
         </div>
       )}
 
+      {/* Event details */}
       <div className="space-y-1">
         {lead.event_type && (
           <p className="text-xs" style={{ color: 'var(--slate)' }}>🎉 {lead.event_type}</p>
@@ -547,14 +689,12 @@ function LeadCard({
         <div className="flex items-center gap-3">
           {lead.event_date && (
             <span className="text-xs flex items-center gap-1" style={{ color: 'var(--muted)' }}>
-              <Calendar size={10} />
-              {format(parseISO(lead.event_date), 'dd MMM')}
+              <Calendar size={10} /> {format(parseISO(lead.event_date), 'dd MMM')}
             </span>
           )}
           {lead.guest_count && (
             <span className="text-xs flex items-center gap-1" style={{ color: 'var(--muted)' }}>
-              <Users size={10} />
-              {lead.guest_count}
+              <Users size={10} /> {lead.guest_count}
             </span>
           )}
         </div>
@@ -565,9 +705,9 @@ function LeadCard({
         )}
       </div>
 
+      {/* Footer */}
       <div className="mt-2 flex items-center justify-between">
-        <span className="text-xs px-2 py-0.5 rounded-full"
-          style={{ background: '#f3f4f6', color: '#6b7280' }}>
+        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f3f4f6', color: '#6b7280' }}>
           {lead.source}
         </span>
         <span className="text-xs" style={{ color: 'var(--muted)' }}>
