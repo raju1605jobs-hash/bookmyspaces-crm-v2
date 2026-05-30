@@ -1,165 +1,253 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-// BOOKMYSPACES — PROPOSAL PDF GENERATOR v3
-// 2-page A4 · Navy + Gold · 10/10 luxury hospitality standard
+// BOOKMYSPACES — PROPOSAL PDF GENERATOR v4
+// Production-ready · 2-page A4 · Navy + Gold
+// Supports: Event Only · Rooms Only · Event + Rooms
+// Future-ready: receipt/invoice generation via same data shape
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { ProposalData } from './scoring'
 
-// ─── Room price helper ────────────────────────────────────────────────────────
+// ─── Shared types (exported for receipt/invoice reuse) ────────────────────────
 
-function getLowestRoomPrice(proposal: any): { price: number | null; label: string } {
-  const rooms: any[] =
-    Array.isArray(proposal.rooms)        ? proposal.rooms        :
-    Array.isArray(proposal.room_types)   ? proposal.room_types   :
-    Array.isArray(proposal.stay_options) ? proposal.stay_options :
-    []
+export interface RoomLineItem {
+  room_type : string
+  quantity  : number
+  rate      : number
+  nights    : number
+}
 
-  if (rooms.length === 0) return { price: null, label: 'from ₹2,500 / night' }
+export interface ProposalRenderData extends Record<string, any> {
+  proposal_number?  : string
+  ai_cover_note?    : string
+  created_at?       : string
+  room_items?       : RoomLineItem[]
+}
 
-  const prices = rooms
-    .map((r: any) => Number(r.price ?? r.base_price ?? r.rate ?? 0))
-    .filter((p: number) => p > 0)
+// ─── Field normalisation ──────────────────────────────────────────────────────
+// Handles both ProposalData interface fields AND raw DB column names.
+// This is the single source of truth for field mapping.
 
-  if (prices.length === 0) return { price: null, label: 'from ₹2,500 / night' }
+function normalise(p: any) {
+  const roomItems: RoomLineItem[] = Array.isArray(p.room_items)
+    ? p.room_items
+        .filter((r: any) => r.room_type && Number(r.rate) > 0)
+        .map((r: any) => ({
+          room_type : String(r.room_type),
+          quantity  : Number(r.quantity) || 1,
+          rate      : Number(r.rate),
+          nights    : Number(r.nights) || 1,
+        }))
+    : []
 
-  const lowest = Math.min(...prices)
-  return { price: lowest, label: `from ₹${lowest.toLocaleString('en-IN')} / night` }
+  const roomsTotal = roomItems.reduce(
+    (s, r) => s + r.quantity * r.rate * r.nights, 0
+  )
+
+  const basePrice: number = Number(p.base_price ?? p.subtotal ?? 0)
+
+  const addons: Array<{ name: string; price: number }> =
+    Array.isArray(p.addons) ? p.addons : []
+
+  const addonsTotal = addons.reduce((s: number, a: any) => s + Number(a.price ?? 0), 0)
+
+  const discountAmt: number = Number(p.discount_amount ?? p.discount_value ?? 0)
+
+  const totalPrice: number = (() => {
+    const stored = Number(p.total_price ?? p.total_amount ?? 0)
+    if (stored > 0) return stored
+    return Math.max(0, basePrice + addonsTotal + roomsTotal - discountAmt)
+  })()
+
+  const advanceRequired: number = Number(
+    p.advance_required ?? p.advance_amount ?? Math.round(totalPrice * 0.5)
+  )
+
+  const packageName: string = String(p.package_name ?? p.package ?? '')
+  const venueName: string   = String(p.venue ?? p.venue_name ?? 'BookMySpaces')
+
+  const hasEvent  = basePrice > 0 || (packageName.length > 0 && packageName !== 'Rooms Only')
+  const hasRooms  = roomItems.length > 0
+
+  return {
+    basePrice, addons, addonsTotal,
+    roomItems, roomsTotal,
+    discountAmt, totalPrice, advanceRequired,
+    packageName, venueName,
+    hasEvent, hasRooms,
+  }
 }
 
 // ─── Cover note sanitiser ─────────────────────────────────────────────────────
-// Strips markdown headers, bold, bullets, excess blank lines.
-// Caps at 4 lines. Falls back to a professionally written note if the
-// AI output is too long, empty, or full of raw formatting.
 
-function sanitiseCoverNote(raw: string | null | undefined, clientName: string, eventType: string): string {
-  if (!raw || raw.trim().length < 10) {
-    return buildFallbackNote(clientName, eventType)
-  }
+function sanitiseCoverNote(
+  raw: string | null | undefined,
+  clientName: string,
+  eventType: string
+): string {
+  if (!raw || raw.trim().length < 10) return fallbackNote(clientName, eventType)
 
-  // Strip common markdown artifacts
   let clean = raw
-    .replace(/#{1,6}\s+/g, '')          // ## headings
-    .replace(/\*\*(.*?)\*\*/g, '$1')    // **bold**
-    .replace(/\*(.*?)\*/g, '$1')        // *italic*
-    .replace(/^[-*•]\s+/gm, '')         // bullet points
-    .replace(/^_{1,3}|_{1,3}$/gm, '')   // underscores
-    .replace(/`[^`]*`/g, '')            // inline code
-    .replace(/\n{3,}/g, '\n\n')         // excess blank lines
+    .replace(/#{1,6}\s+/g, '')
+    .replace(/\*\*(.*?)\*\*/g, '$1')
+    .replace(/\*(.*?)\*/g, '$1')
+    .replace(/^[-*•]\s+/gm, '')
+    .replace(/^_{1,3}|_{1,3}$/gm, '')
+    .replace(/`[^`]*`/g, '')
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
 
-  // Detect if it still looks like a structured AI doc (all-caps lines, numbered sections)
-  const hasMarkdownPatterns = /^[A-Z\s]{8,}$|^\d+\.\s|CLIENT:|EVENT DATE:/m.test(clean)
-  if (hasMarkdownPatterns) {
-    return buildFallbackNote(clientName, eventType)
+  if (/^[A-Z\s]{8,}$|^\d+\.\s|CLIENT:|EVENT DATE:/m.test(clean)) {
+    return fallbackNote(clientName, eventType)
   }
 
-  // Cap at 4 lines (~320 chars) for space budget
-  const lines = clean.split('\n').filter(l => l.trim().length > 0).slice(0, 4)
-  return lines.join('\n')
+  return clean.split('\n').filter(l => l.trim().length > 0).slice(0, 4).join('\n')
 }
 
-function buildFallbackNote(clientName: string, eventType: string): string {
-  const firstName = (clientName || 'Valued Guest').split(' ')[0]
-  const event = eventType || 'your special occasion'
-  return `Dear ${firstName},\n\nWe are delighted to present a carefully curated ${event.toLowerCase()} experience designed exclusively for you. Our team looks forward to creating an unforgettable occasion with exceptional hospitality and personalised service.\n\nWarm regards,\nBookMySpaces Hospitality Team`
+function fallbackNote(clientName: string, eventType: string): string {
+  const name  = (clientName || 'Valued Guest').split(' ')[0]
+  const event = (eventType || 'your special occasion').toLowerCase()
+  return `Dear ${name},\n\nWe are delighted to present a carefully curated ${event} experience designed exclusively for you. Our team looks forward to creating an unforgettable occasion with exceptional hospitality and personalised service.\n\nWarm regards,\nBookMySpaces Hospitality Team`
+}
+
+// ─── Salutation helper ────────────────────────────────────────────────────────
+
+function salutation(name: string): string {
+  if (!name) return ''
+  const n = name.trim()
+  const lower = n.toLowerCase()
+  if (lower.startsWith('mr') || lower.startsWith('ms') || lower.startsWith('dr')) return n
+  // Simple gender heuristic — default to Mr. for unknown; caller can override via name field
+  return `Mr. ${n}`
 }
 
 // ─── Default inclusions ───────────────────────────────────────────────────────
 
-function getDefaultInclusions(packageName: string): string[] {
-  const pkg = packageName.toLowerCase()
-
-  if (pkg.includes('platinum')) return [
+function defaultInclusions(pkg: string): string[] {
+  const p = pkg.toLowerCase()
+  if (p.includes('platinum')) return [
     'Rooftop venue (5 hours)', 'Premium theme decoration', 'Full buffet dinner',
-    'DJ music setup', 'Party lighting setup', 'Welcome drinks for all guests',
-    'Cake table + stage setup', 'Full event coordination', 'Setup & cleanup',
+    'DJ music setup', 'Party lighting', 'Welcome drinks', 'Cake table + stage',
+    'Full event coordination', 'Setup & cleanup',
   ]
-
-  if (pkg.includes('gold')) return [
-    'Rooftop venue (4 hours)', 'Premium decoration setup', 'Buffet dinner (expanded menu)',
-    'Sound system + microphone', 'Party lighting setup', 'Cake table setup',
+  if (p.includes('gold')) return [
+    'Rooftop venue (4 hours)', 'Premium decoration', 'Buffet dinner (expanded)',
+    'Sound + microphone', 'Party lighting', 'Cake table setup',
     'Event support staff', 'Setup & cleanup',
   ]
-
-  if (pkg.includes('silver')) return [
-    'Rooftop venue (4 hours)', 'Basic decoration setup', 'Buffet dinner (veg + non-veg)',
-    'Sound system & music', 'Basic lighting arrangement', 'Event support staff', 'Setup & cleanup',
+  if (p.includes('silver')) return [
+    'Rooftop venue (4 hours)', 'Basic decoration', 'Buffet dinner',
+    'Sound system', 'Basic lighting', 'Event staff', 'Setup & cleanup',
   ]
-
+  if (p.includes('rooms only') || p.includes('room')) return []
   return [
-    'Venue as per package', 'Decoration as agreed', 'Food & beverages as per plan',
+    'Venue as agreed', 'Decoration as agreed', 'Food & beverages',
     'Sound & lighting', 'Event support staff', 'Setup & cleanup',
   ]
+}
+
+// ─── Date helpers ─────────────────────────────────────────────────────────────
+
+function fmtDate(d: string | null | undefined): string {
+  if (!d) return ''
+  try { return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) }
+  catch { return '' }
+}
+
+function validUntil(created?: string): string {
+  const base = created ? new Date(created) : new Date()
+  base.setDate(base.getDate() + 7)
+  return base.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+// ─── INR formatter ────────────────────────────────────────────────────────────
+
+function inr(n: number): string {
+  return '₹' + Number(n).toLocaleString('en-IN')
 }
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export function generateProposalHTML(
-  proposal: ProposalData & { proposal_number?: string; ai_cover_note?: string }
+  proposal: ProposalData & ProposalRenderData
 ): string {
 
-  const today = new Date().toLocaleDateString('en-IN', {
-    day: 'numeric', month: 'long', year: 'numeric',
-  })
+  const {
+    basePrice, addons, addonsTotal,
+    roomItems, roomsTotal,
+    discountAmt, totalPrice, advanceRequired,
+    packageName, venueName,
+    hasEvent, hasRooms,
+  } = normalise(proposal)
 
-  // ── Field normalisation (DB columns vs ProposalData interface) ────────────
-  const basePrice: number =
-    (proposal as any).base_price ?? (proposal as any).subtotal ?? 0
+  const today     = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+  const validTill = validUntil((proposal as any).created_at)
+  const propNum   = String((proposal as any).proposal_number || 'DRAFT')
+  const balance   = totalPrice - advanceRequired
+  const coverNote = sanitiseCoverNote((proposal as any).ai_cover_note, proposal.client_name, proposal.event_type)
+  const clientSal = salutation(proposal.client_name)
 
-  const totalPrice: number =
-    (proposal as any).total_price ?? (proposal as any).total_amount ?? 0
+  // ── Accommodation table rows ───────────────────────────────────────────
+  const accomRowsHtml = roomItems.map(r => `
+    <tr>
+      <td class="accom-td"><span class="accom-icon">🛏</span>${r.room_type}</td>
+      <td class="accom-td" style="text-align:center">${r.quantity}</td>
+      <td class="accom-td" style="text-align:center">${r.nights} night${r.nights > 1 ? 's' : ''}</td>
+      <td class="accom-td" style="text-align:right">${inr(r.rate)}</td>
+      <td class="accom-td accom-subtotal" style="text-align:right">${inr(r.quantity * r.rate * r.nights)}</td>
+    </tr>`).join('')
 
-  const advanceRequired: number =
-    (proposal as any).advance_required ??
-    (proposal as any).advance_amount ??
-    Math.round(totalPrice * 0.5)
+  // ── Addon rows ─────────────────────────────────────────────────────────
+  const addonsRowsHtml = addons.map((a: any) => `
+    <tr>
+      <td class="lbl" style="padding:4px 0">${a.name}</td>
+      <td class="val" style="padding:4px 0">${inr(Number(a.price) || 0)}</td>
+    </tr>`).join('')
 
-  const packageName: string =
-    (proposal as any).package_name ?? (proposal as any).package ?? 'Standard'
-
-  const venueName: string =
-    (proposal as any).venue ?? (proposal as any).venue_name ?? 'BookMySpaces'
-
-  // ── Cover note (sanitised — no markdown ever reaches the PDF) ─────────────
-  const coverNote = sanitiseCoverNote(
-    (proposal as any).ai_cover_note,
-    proposal.client_name,
-    proposal.event_type
-  )
-
-  // ── Addons ────────────────────────────────────────────────────────────────
-  const addonsRows = proposal.addons?.length
-    ? proposal.addons.map(a => `
+  // ── Pricing breakdown rows ─────────────────────────────────────────────
+  const pricingRows = [
+    hasEvent && basePrice > 0 ? `
       <tr>
-        <td style="padding:5px 0;color:#4a4a5a;font-size:12px">${a.name}</td>
-        <td style="padding:5px 0;text-align:right;color:#1a1a1a;font-size:12px">₹${a.price.toLocaleString('en-IN')}</td>
-      </tr>`).join('')
-    : ''
+        <td class="lbl" style="padding:4px 0">${packageName || 'Event Package'}</td>
+        <td class="val" style="padding:4px 0">${inr(basePrice)}</td>
+      </tr>` : '',
+    addonsRowsHtml,
+    hasRooms ? `
+      <tr>
+        <td class="lbl" style="padding:4px 0">Accommodation (${roomItems.length} type${roomItems.length > 1 ? 's' : ''})</td>
+        <td class="val" style="padding:4px 0">${inr(roomsTotal)}</td>
+      </tr>` : '',
+    discountAmt > 0 ? `
+      <tr>
+        <td style="padding:4px 0;color:#16a34a;font-size:12px">Discount${proposal.discount_reason ? ` (${proposal.discount_reason})` : ''}</td>
+        <td style="padding:4px 0;text-align:right;color:#16a34a;font-size:12px">− ${inr(discountAmt)}</td>
+      </tr>` : '',
+  ].filter(Boolean).join('')
 
-  // ── Discount row ──────────────────────────────────────────────────────────
-  const discountRow = proposal.discount_amount && proposal.discount_amount > 0
-    ? `<tr>
-        <td style="padding:5px 0;color:#16a34a;font-size:12px">Discount${proposal.discount_reason ? ` (${proposal.discount_reason})` : ''}</td>
-        <td style="padding:5px 0;text-align:right;color:#16a34a;font-size:12px">− ₹${proposal.discount_amount.toLocaleString('en-IN')}</td>
-      </tr>`
-    : ''
+  // ── Inclusions list ────────────────────────────────────────────────────
+  const inclusions  = hasEvent
+    ? (proposal.inclusions || defaultInclusions(packageName))
+    : []
+  const inclusionsHtml = inclusions.map((i: string) => `<li>${i}</li>`).join('')
 
-  // ── Inclusions ────────────────────────────────────────────────────────────
-  const inclusionsList = (proposal.inclusions || getDefaultInclusions(packageName))
-    .map(inc => `<li>${inc}</li>`)
-    .join('')
-
-  // ── Enhancement items ─────────────────────────────────────────────────────
-  const { label: roomLabel } = getLowestRoomPrice(proposal)
-  const enhItems: Array<{ icon: string; name: string; price: string; gold: boolean }> = [
-    { icon: '🛏', name: 'Guest Room Accommodation',     price: roomLabel,                   gold: true  },
-    { icon: '🌸', name: 'Event Decoration Setup',       price: 'Customised for your event', gold: false },
-    { icon: '🎧', name: 'DJ & Music Arrangements',      price: 'Available on request',      gold: false },
-    { icon: '🎸', name: 'Live / Acoustic Performances', price: 'Available on request',      gold: false },
-    { icon: '🍽', name: 'Food & Catering Options',      price: 'Customised for your event', gold: false },
-    { icon: '✨', name: 'Custom Celebration Packages',  price: 'Speak with our team',       gold: false },
+  // ── Concierge items ────────────────────────────────────────────────────
+  // If rooms are already booked, show "Additional Room Nights" instead of generic entry
+  const conciergeItems = [
+    {
+      icon: '🛏',
+      name: hasRooms ? 'Additional Room Nights' : 'Guest Room Accommodation',
+      price: hasRooms
+        ? `from ${inr(Math.min(...roomItems.map(r => r.rate)))} / night`
+        : 'from ₹2,500 / night',
+      gold: true,
+    },
+    { icon: '🌸', name: 'Event Decoration & Setup',      price: 'Customised for your event', gold: false },
+    { icon: '🎧', name: 'DJ & Music Arrangements',       price: 'Available on request',      gold: false },
+    { icon: '🎸', name: 'Live / Acoustic Performances',  price: 'Available on request',      gold: false },
+    { icon: '🍽', name: 'Food & Catering Options',       price: 'Customised for your event', gold: false },
+    { icon: '✨', name: 'Custom Celebration Packages',   price: 'Speak with our team',       gold: false },
   ]
-  const enhItemsHtml = enhItems.map(item => `
+
+  const conciergeHtml = conciergeItems.map(item => `
     <div class="enh-item">
       <span class="enh-item-icon">${item.icon}</span>
       <div>
@@ -168,252 +256,137 @@ export function generateProposalHTML(
       </div>
     </div>`).join('')
 
-  // ── First name for header ─────────────────────────────────────────────────
-  const firstName = (proposal.client_name || '').split(' ')[0] || proposal.client_name
+  // ── Package card content ───────────────────────────────────────────────
+  const packageCardHtml = hasEvent
+    ? `<div class="package-tier">BookMySpaces · ${venueName}</div>
+       <div class="package-name">${packageName} Package</div>
+       <div class="package-price">${inr(basePrice)}</div>`
+    : `<div class="package-tier">BookMySpaces · ${venueName}</div>
+       <div class="package-name" style="font-size:18px">Accommodation Booking</div>
+       <div class="package-price">${inr(roomsTotal)}</div>
+       <div style="font-size:11px;color:rgba(255,255,255,.55);margin-top:6px;line-height:1.5">
+         ${roomItems.length} room type${roomItems.length > 1 ? 's' : ''} · ${roomItems.reduce((s,r) => s + r.nights, 0)} total night${roomItems.reduce((s,r) => s + r.nights, 0) > 1 ? 's' : ''}
+       </div>`
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Proposal ${(proposal as any).proposal_number || ''} — BookMySpaces</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Proposal ${propNum} — BookMySpaces</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=DM+Sans:wght@300;400;500;600&display=swap');
 
-/* ── Reset ───────────────────────────────────── */
-* { margin:0; padding:0; box-sizing:border-box }
-body {
-  font-family:'DM Sans',system-ui,sans-serif;
-  color:#1a1a1a; background:#fff;
-  font-size:12px; line-height:1.45;
-}
-.page { max-width:800px; margin:0 auto }
+/* ── Reset ─────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'DM Sans',system-ui,sans-serif;color:#1a1a1a;background:#fff;font-size:12px;line-height:1.45}
+.page{max-width:800px;margin:0 auto}
 
-/* ── Header ──────────────────────────────────── */
-.header {
-  background:linear-gradient(135deg,#0b1520 0%,#162038 100%);
-  padding:20px 40px 18px;
-  position:relative; overflow:hidden;
-}
-.header::before {
-  content:''; position:absolute;
-  top:-50px; right:-50px;
-  width:160px; height:160px; border-radius:50%;
-  background:rgba(201,168,76,0.07);
-}
-.header-top {
-  display:flex; justify-content:space-between;
-  align-items:flex-start; margin-bottom:14px;
-}
-.brand-name {
-  font-family:'Cormorant Garamond',Georgia,serif;
-  font-size:22px; color:#fff; font-weight:400; letter-spacing:.4px;
-}
-.brand-tag {
-  font-size:9px; color:#c9a84c;
-  letter-spacing:.22em; text-transform:uppercase; margin-top:3px;
-}
-.proposal-meta { text-align:right }
-.proposal-number { font-size:11px; color:rgba(255,255,255,.45); letter-spacing:.08em }
-.proposal-date   { font-size:10px; color:rgba(255,255,255,.35); margin-top:3px }
+/* ── Header ─────────────────────────────── */
+.header{background:linear-gradient(135deg,#0b1520 0%,#162038 100%);padding:20px 40px 18px;position:relative;overflow:hidden}
+.header::before{content:'';position:absolute;top:-50px;right:-50px;width:160px;height:160px;border-radius:50%;background:rgba(201,168,76,.07)}
+.header-top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px}
+.brand-name{font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;color:#fff;font-weight:400;letter-spacing:.4px}
+.brand-tag{font-size:9px;color:#c9a84c;letter-spacing:.22em;text-transform:uppercase;margin-top:3px}
+.proposal-meta{text-align:right}
+.proposal-number{font-size:11px;color:rgba(255,255,255,.45);letter-spacing:.08em}
+.proposal-date{font-size:10px;color:rgba(255,255,255,.35);margin-top:3px}
+.header-for{font-size:9px;letter-spacing:.22em;text-transform:uppercase;color:rgba(201,168,76,.65);margin-bottom:4px}
+.header-client-name{font-family:'Cormorant Garamond',Georgia,serif;font-size:34px;font-weight:300;color:#fff;letter-spacing:.4px;line-height:1.1}
+.header-event-line{font-size:11px;color:rgba(201,168,76,.8);letter-spacing:.14em;text-transform:uppercase;margin-top:5px}
 
-/* Client name as hero focal point */
-.header-for {
-  font-size:9px; letter-spacing:.22em; text-transform:uppercase;
-  color:rgba(201,168,76,.65); margin-bottom:4px;
-}
-.header-client-name {
-  font-family:'Cormorant Garamond',Georgia,serif;
-  font-size:36px; font-weight:300; color:#fff;
-  letter-spacing:.4px; line-height:1.1;
-}
-.header-event-line {
-  font-size:11px; color:rgba(201,168,76,.8);
-  letter-spacing:.14em; text-transform:uppercase; margin-top:5px;
-}
+/* ── Gold rule ──────────────────────────── */
+.gold-rule{height:1px;background:linear-gradient(90deg,#c9a84c 0%,rgba(201,168,76,.15) 70%,transparent 100%)}
 
-/* ── Gold rule ───────────────────────────────── */
-.gold-rule {
-  height:1px;
-  background:linear-gradient(90deg,#c9a84c 0%,rgba(201,168,76,.15) 70%,transparent 100%);
-}
+/* ── Sections ───────────────────────────── */
+.section{padding:14px 40px;border-bottom:1px solid #f0ede8}
+.section-label{font-size:8.5px;letter-spacing:.22em;text-transform:uppercase;color:#c9a84c;font-weight:600;margin-bottom:9px}
 
-/* ── Sections ────────────────────────────────── */
-.section { padding:14px 40px; border-bottom:1px solid #f0ede8 }
-.section-label {
-  font-size:8.5px; letter-spacing:.22em; text-transform:uppercase;
-  color:#c9a84c; font-weight:600; margin-bottom:9px;
-}
+/* ── Cover note ─────────────────────────── */
+.cover-note{font-size:12px;color:#2c2c2c;line-height:1.65;font-style:italic;white-space:pre-line;padding:10px 14px;border-left:2px solid #c9a84c;background:#fdfaf6;border-radius:0 6px 6px 0}
 
-/* ── Cover note ──────────────────────────────── */
-.cover-note {
-  font-size:12px; color:#2c2c2c; line-height:1.65;
-  font-style:italic; white-space:pre-line;
-  padding:10px 14px; border-left:2px solid #c9a84c;
-  background:#fdfaf6; border-radius:0 6px 6px 0;
-}
+/* ── Event details ──────────────────────── */
+.details-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.detail-item{background:#f8f5f0;border-radius:7px;padding:8px 10px;border-left:2px solid #c9a84c}
+.detail-label{font-size:8.5px;text-transform:uppercase;letter-spacing:.14em;color:#8a8a9a;margin-bottom:2px}
+.detail-value{font-size:12px;color:#1a1a1a;font-weight:500}
 
-/* ── Event details ───────────────────────────── */
-.details-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px }
-.detail-item {
-  background:#f8f5f0; border-radius:7px;
-  padding:8px 10px; border-left:2px solid #c9a84c;
-}
-.detail-label { font-size:8.5px; text-transform:uppercase; letter-spacing:.14em; color:#8a8a9a; margin-bottom:2px }
-.detail-value  { font-size:12px; color:#1a1a1a; font-weight:500 }
+/* ── Accommodation card ─────────────────── */
+.accom-card{background:#f8f5f0;border-radius:9px;border:1px solid #ede8e0;overflow:hidden}
+.accom-table{width:100%;border-collapse:collapse}
+.accom-th{background:linear-gradient(135deg,#0b1520,#162038);color:rgba(255,255,255,.7);font-size:9px;text-transform:uppercase;letter-spacing:.14em;padding:7px 12px;font-weight:500;text-align:left}
+.accom-td{padding:8px 12px;font-size:12px;color:#1a1a1a;border-bottom:1px solid #ede8e0;background:#fff}
+.accom-td:first-child{font-weight:500}
+.accom-subtotal{font-weight:600;color:#0b1520}
+.accom-icon{font-size:13px;margin-right:5px}
+.accom-total-row{display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:linear-gradient(135deg,#0b1520,#162038)}
+.accom-total-label{font-size:10px;color:rgba(255,255,255,.6);text-transform:uppercase;letter-spacing:.1em}
+.accom-total-value{font-size:16px;font-weight:700;color:#c9a84c}
 
-/* ── Package + pricing layout ────────────────── */
-.pkg-pricing-row { display:flex; gap:14px; align-items:flex-start; padding:14px 40px }
+/* ── Package + pricing ──────────────────── */
+.pkg-pricing-row{display:flex;gap:14px;align-items:flex-start;padding:14px 40px}
+.package-card{flex:1;background:linear-gradient(145deg,#0b1520,#162038);border-radius:10px;padding:16px 18px;color:#fff}
+.package-tier{font-size:8.5px;letter-spacing:.22em;text-transform:uppercase;color:#c9a84c;margin-bottom:5px}
+.package-name{font-family:'Cormorant Garamond',Georgia,serif;font-size:22px;font-weight:400}
+.package-price{font-family:'Cormorant Garamond',Georgia,serif;font-size:26px;font-weight:600;color:#c9a84c;margin-top:4px}
+.pricing-wrap{flex:1.1}
+.pricing-table{width:100%;border-collapse:collapse}
+.pricing-table td{padding:4px 0;font-size:12px}
+.lbl{color:#4a4a5a}
+.val{text-align:right;color:#1a1a1a;font-weight:500}
+.total-row td{padding:8px 0 4px;font-size:16px;font-weight:600;color:#1a1a1a;border-top:1.5px solid #c9a84c}
+.advance-box{background:#f0fdf4;border:1px solid #86efac;border-radius:7px;padding:7px 12px;margin-top:8px;display:flex;justify-content:space-between;align-items:center}
+.advance-label{color:#16a34a;font-size:11px}
+.advance-amount{color:#16a34a;font-size:17px;font-weight:600}
 
-.package-card {
-  flex:1;
-  background:linear-gradient(145deg,#0b1520,#162038);
-  border-radius:10px; padding:16px 18px; color:#fff;
-}
-.package-tier {
-  font-size:8.5px; letter-spacing:.22em; text-transform:uppercase;
-  color:#c9a84c; margin-bottom:5px;
-}
-.package-name {
-  font-family:'Cormorant Garamond',Georgia,serif;
-  font-size:22px; font-weight:400;
-}
-.package-price {
-  font-family:'Cormorant Garamond',Georgia,serif;
-  font-size:26px; font-weight:600; color:#c9a84c; margin-top:4px;
-}
+/* ── Inclusions ─────────────────────────── */
+.inclusions-list{list-style:none;columns:4;gap:8px}
+.inclusions-list li{font-size:11px;color:#3a3a4a;padding:2px 0;line-height:1.4;break-inside:avoid}
+.inclusions-list li::before{content:'✔ ';color:#c9a84c;font-weight:600}
+.req-box{margin-top:10px;padding:9px 12px;background:#fff8e8;border-radius:7px;border:1px solid rgba(201,168,76,.25);font-size:11px;color:#4a4a5a;line-height:1.5}
 
-.pricing-wrap { flex:1.1 }
-.pricing-table { width:100%; border-collapse:collapse }
-.pricing-table td { padding:4px 0; font-size:12px }
-.pricing-table .lbl { color:#4a4a5a }
-.pricing-table .val { text-align:right; color:#1a1a1a; font-weight:500 }
-.total-row td {
-  padding:8px 0 4px; font-size:16px; font-weight:600; color:#1a1a1a;
-  border-top:1.5px solid #c9a84c;
-}
-.advance-box {
-  background:#f0fdf4; border:1px solid #86efac; border-radius:7px;
-  padding:7px 12px; margin-top:8px;
-  display:flex; justify-content:space-between; align-items:center;
-}
-.advance-label { color:#16a34a; font-size:11px }
-.advance-amount { color:#16a34a; font-size:17px; font-weight:600 }
+/* ── Concierge / Enhancement ────────────── */
+.enh-wrap{margin:0 40px 10px;border-radius:9px;overflow:hidden;border:1px solid rgba(201,168,76,.28)}
+.enh-header{background:linear-gradient(135deg,#0b1520,#162038);padding:10px 16px;display:flex;align-items:center;justify-content:space-between}
+.enh-header-left{display:flex;align-items:center;gap:9px}
+.enh-header-icon{font-size:14px;line-height:1}
+.enh-header-label{font-size:8px;letter-spacing:.2em;text-transform:uppercase;color:#c9a84c;font-weight:600;margin-bottom:1px}
+.enh-header-title{font-size:12px;color:#fff;font-weight:300}
+.enh-header-right{font-size:9px;color:rgba(255,255,255,.3);text-align:right;line-height:1.4}
+.enh-body{background:linear-gradient(180deg,#f8f5f0,#fff);padding:10px 16px}
+.enh-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px}
+.enh-item{display:flex;align-items:flex-start;gap:6px;padding:7px 9px;background:#fff;border-radius:6px;border:1px solid #ede8e0}
+.enh-item-icon{font-size:12px;flex-shrink:0;line-height:1.2;margin-top:1px}
+.enh-item-name{font-size:10px;font-weight:600;color:#0b1520;margin-bottom:1px}
+.enh-item-price{font-size:9px;color:#8a9aaa}
+.enh-item-price.gold{color:#a07830;font-weight:600}
+.enh-footer{background:rgba(201,168,76,.05);border-top:1px solid rgba(201,168,76,.14);padding:7px 16px;display:flex;align-items:center;justify-content:space-between}
+.enh-footer-text{font-size:9px;color:#5a6a80;line-height:1.4}
+.enh-footer-cta{font-size:9px;font-weight:700;color:#a07830;white-space:nowrap;border:1px solid rgba(201,168,76,.28);padding:3px 10px;border-radius:20px;background:rgba(201,168,76,.07)}
 
-/* ── Inclusions ──────────────────────────────── */
-.inclusions-list { list-style:none; columns:4; gap:8px }
-.inclusions-list li {
-  font-size:11px; color:#3a3a4a; padding:2px 0; line-height:1.4;
-  break-inside:avoid;
-}
-.inclusions-list li::before { content:'✔ '; color:#c9a84c; font-weight:600 }
+/* ── Footer ─────────────────────────────── */
+.footer{padding:16px 40px 18px;background:#f8f5f0}
+.footer-cta{font-family:'Cormorant Garamond',Georgia,serif;font-size:18px;color:#1a1a1a;margin-bottom:10px}
+.contact-row{display:flex;gap:0;flex-wrap:wrap;margin-bottom:10px;border:1px solid #ede8e0;border-radius:8px;overflow:hidden}
+.contact-cell{flex:1;padding:8px 12px;border-right:1px solid #ede8e0;background:#fff}
+.contact-cell:last-child{border-right:none}
+.contact-cell-label{font-size:8px;text-transform:uppercase;letter-spacing:.14em;color:#8a8a9a;margin-bottom:2px}
+.contact-cell-value{font-size:11px;color:#1a1a1a;font-weight:500}
+.footer-address{font-size:10px;color:#6a6a7a;margin-bottom:8px}
+.validity-note{font-size:9.5px;color:#8a8a9a;line-height:1.55;border-top:1px solid #e8e4de;padding-top:8px}
 
-/* Special requirements */
-.req-box {
-  margin-top:10px; padding:9px 12px;
-  background:#fff8e8; border-radius:7px;
-  border:1px solid rgba(201,168,76,.25);
-  font-size:11px; color:#4a4a5a; line-height:1.5;
-}
+/* ── Closing strip ──────────────────────── */
+.closing-strip{padding:16px 40px 20px;text-align:center}
+.closing-rule{height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,.3) 30%,rgba(201,168,76,.3) 70%,transparent);margin-bottom:14px}
+.closing-text{font-size:9.5px;color:#9a9aaa;line-height:1.75;letter-spacing:.01em}
+.closing-ref{display:inline-block;margin-top:8px;font-size:9px;font-weight:600;color:rgba(201,168,76,.7);letter-spacing:.18em;text-transform:uppercase;border-top:1px solid rgba(201,168,76,.2);padding-top:6px}
 
-/* ── Enhancement section ─────────────────────── */
-.enh-wrap {
-  margin:0 40px 10px;
-  border-radius:9px; overflow:hidden;
-  border:1px solid rgba(201,168,76,.28);
-}
-.enh-header {
-  background:linear-gradient(135deg,#0b1520,#162038);
-  padding:8px 16px;
-  display:flex; align-items:center; justify-content:space-between;
-}
-.enh-header-left { display:flex; align-items:center; gap:9px }
-.enh-header-icon { font-size:14px; line-height:1 }
-.enh-header-label {
-  font-size:8px; letter-spacing:.2em; text-transform:uppercase;
-  color:#c9a84c; font-weight:600; margin-bottom:1px;
-}
-.enh-header-title { font-size:12px; color:#fff; font-weight:300 }
-.enh-header-right { font-size:9px; color:rgba(255,255,255,.3); text-align:right; line-height:1.4 }
-.enh-body { background:linear-gradient(180deg,#f8f5f0,#fff); padding:8px 16px }
-.enh-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px }
-.enh-item {
-  display:flex; align-items:flex-start; gap:6px;
-  padding:6px 8px; background:#fff;
-  border-radius:6px; border:1px solid #ede8e0;
-}
-.enh-item-icon { font-size:12px; flex-shrink:0; line-height:1.2; margin-top:1px }
-.enh-item-name  { font-size:10px; font-weight:600; color:#0b1520; margin-bottom:1px }
-.enh-item-price { font-size:9px; color:#8a9aaa }
-.enh-item-price.gold { color:#a07830; font-weight:600 }
-.enh-footer {
-  background:rgba(201,168,76,.05); border-top:1px solid rgba(201,168,76,.14);
-  padding:5px 16px;
-  display:flex; align-items:center; justify-content:space-between;
-}
-.enh-footer-text { font-size:9px; color:#5a6a80; line-height:1.4 }
-.enh-footer-cta {
-  font-size:9px; font-weight:700; color:#a07830; white-space:nowrap;
-  border:1px solid rgba(201,168,76,.28); padding:2px 9px;
-  border-radius:20px; background:rgba(201,168,76,.07);
-}
-
-/* ── Footer ──────────────────────────────────── */
-.footer { padding:12px 40px 16px; background:#f8f5f0 }
-.footer-cta {
-  font-family:'Cormorant Garamond',Georgia,serif;
-  font-size:17px; color:#1a1a1a; margin-bottom:9px;
-}
-.contact-row {
-  display:flex; gap:0; flex-wrap:wrap;
-  margin-bottom:8px; border:1px solid #ede8e0;
-  border-radius:8px; overflow:hidden;
-}
-.contact-cell {
-  flex:1; padding:7px 12px;
-  border-right:1px solid #ede8e0; background:#fff;
-}
-.contact-cell:last-child { border-right:none }
-.contact-cell-label {
-  font-size:8px; text-transform:uppercase; letter-spacing:.14em;
-  color:#8a8a9a; margin-bottom:2px;
-}
-.contact-cell-value { font-size:11px; color:#1a1a1a; font-weight:500 }
-.footer-address { font-size:10px; color:#6a6a7a; margin-bottom:6px }
-.validity-note {
-  font-size:9.5px; color:#8a8a9a; line-height:1.5;
-  border-top:1px solid #e8e4de; padding-top:7px; margin-top:0;
-}
-
-/* ── Closing strip ───────────────────────────── */
-.closing-strip {
-  padding:14px 40px 18px;
-  text-align:center;
-}
-.closing-rule {
-  height:1px;
-  background:linear-gradient(90deg,transparent,rgba(201,168,76,.3) 30%,rgba(201,168,76,.3) 70%,transparent);
-  margin-bottom:12px;
-}
-.closing-text {
-  font-size:9.5px; color:#9a9aaa; line-height:1.7;
-  letter-spacing:.01em;
-}
-.closing-ref {
-  display:inline-block; margin-top:6px;
-  font-size:9px; font-weight:600;
-  color:rgba(201,168,76,.7);
-  letter-spacing:.18em; text-transform:uppercase;
-  border-top:1px solid rgba(201,168,76,.2);
-  padding-top:5px;
-}
-
-/* ── Print ───────────────────────────────────── */
-@media print {
-  @page { size:A4; margin:0 }
-  * { -webkit-print-color-adjust:exact!important; print-color-adjust:exact!important }
-  body { overflow:visible!important }
-  .no-print { display:none!important }
+/* ── Print ──────────────────────────────── */
+@media print{
+  @page{size:A4;margin:0}
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+  body{overflow:visible!important}
+  .no-print{display:none!important}
 }
 </style>
 </head>
@@ -428,13 +401,16 @@ body {
       <div class="brand-tag">Premium Hospitality · Kolkata</div>
     </div>
     <div class="proposal-meta">
-      <div class="proposal-number">Proposal #${(proposal as any).proposal_number || 'DRAFT'}</div>
+      <div class="proposal-number">Proposal #${propNum}</div>
       <div class="proposal-date">${today}</div>
     </div>
   </div>
   <div class="header-for">Prepared Exclusively For</div>
-  <div class="header-client-name">${proposal.client_name}</div>
-  <div class="header-event-line">${proposal.event_type}${proposal.event_date ? ' · ' + new Date(proposal.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : ''}</div>
+  <div class="header-client-name">${clientSal}</div>
+  <div class="header-event-line">${[
+    proposal.event_type,
+    fmtDate(proposal.event_date)
+  ].filter(Boolean).join(' · ')}</div>
 </div>
 <div class="gold-rule"></div>
 
@@ -464,7 +440,7 @@ body {
     ${proposal.event_date ? `
     <div class="detail-item">
       <div class="detail-label">Date</div>
-      <div class="detail-value">${new Date(proposal.event_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+      <div class="detail-value">${fmtDate(proposal.event_date)}</div>
     </div>` : ''}
     ${(proposal as any).event_time ? `
     <div class="detail-item">
@@ -483,50 +459,67 @@ body {
   </div>
 </div>
 
-<!-- ═══ PACKAGE + PRICING (side by side) ═══ -->
-<div class="pkg-pricing-row">
-
-  <div class="package-card">
-    <div class="package-tier">BookMySpaces · ${venueName}</div>
-    <div class="package-name">${packageName} Package</div>
-    <div class="package-price">₹${basePrice.toLocaleString('en-IN')}</div>
+<!-- ═══ ACCOMMODATION DETAILS — only when rooms exist ═══ -->
+${hasRooms ? `
+<div class="section">
+  <div class="section-label">Accommodation Details</div>
+  <div class="accom-card">
+    <table class="accom-table">
+      <thead>
+        <tr>
+          <th class="accom-th">Room Type</th>
+          <th class="accom-th" style="text-align:center">Qty</th>
+          <th class="accom-th" style="text-align:center">Nights</th>
+          <th class="accom-th" style="text-align:right">Rate / Night</th>
+          <th class="accom-th" style="text-align:right">Subtotal</th>
+        </tr>
+      </thead>
+      <tbody>${accomRowsHtml}</tbody>
+    </table>
+    <div class="accom-total-row">
+      <span class="accom-total-label">Accommodation Subtotal</span>
+      <span class="accom-total-value">${inr(roomsTotal)}</span>
+    </div>
   </div>
+</div>` : ''}
 
+<!-- ═══ PACKAGE + PRICING ═══ -->
+<div class="pkg-pricing-row">
+  <div class="package-card">${packageCardHtml}</div>
   <div class="pricing-wrap">
     <table class="pricing-table">
-      <tr>
-        <td class="lbl">${packageName} Package</td>
-        <td class="val">₹${basePrice.toLocaleString('en-IN')}</td>
-      </tr>
-      ${addonsRows}
-      ${discountRow}
+      ${pricingRows}
       <tr class="total-row">
-        <td>Total Amount</td>
-        <td style="text-align:right;color:#c9a84c">₹${totalPrice.toLocaleString('en-IN')}</td>
+        <td>Grand Total</td>
+        <td style="text-align:right;color:#c9a84c">${inr(totalPrice)}</td>
       </tr>
     </table>
     <div class="advance-box">
       <div>
         <div class="advance-label" style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;font-weight:600">Advance to Confirm</div>
-        <div style="font-size:9px;color:#16a34a;margin-top:1px">Balance due on event day</div>
+        <div style="font-size:9px;color:#16a34a;margin-top:1px">Balance due on event day · ${inr(balance)}</div>
       </div>
-      <div class="advance-amount">₹${advanceRequired.toLocaleString('en-IN')}</div>
+      <div class="advance-amount">${inr(advanceRequired)}</div>
     </div>
   </div>
-
 </div>
 
-<!-- ═══ INCLUSIONS ═══ -->
+<!-- ═══ INCLUSIONS — only when event package exists ═══ -->
+${hasEvent && inclusionsHtml ? `
 <div class="section">
   <div class="section-label">What's Included</div>
-  <ul class="inclusions-list">${inclusionsList}</ul>
+  <ul class="inclusions-list">${inclusionsHtml}</ul>
   ${proposal.special_requirements ? `
   <div class="req-box">
     <span style="font-size:8.5px;text-transform:uppercase;letter-spacing:.14em;color:#c9a84c;font-weight:600">Special Requirements · </span>${proposal.special_requirements}
   </div>` : ''}
-</div>
+</div>` : proposal.special_requirements ? `
+<div class="section">
+  <div class="section-label">Special Requirements</div>
+  <div class="req-box">${proposal.special_requirements}</div>
+</div>` : ''}
 
-<!-- ═══ ENHANCE YOUR CELEBRATION ═══ -->
+<!-- ═══ CONCIERGE SERVICES ═══ -->
 <div class="enh-wrap">
   <div class="enh-header">
     <div class="enh-header-left">
@@ -539,7 +532,7 @@ body {
     <div class="enh-header-right">Everything you need,<br>arranged by our team.</div>
   </div>
   <div class="enh-body">
-    <div class="enh-grid">${enhItemsHtml}</div>
+    <div class="enh-grid">${conciergeHtml}</div>
   </div>
   <div class="enh-footer">
     <div class="enh-footer-text">Perfect for birthdays, anniversaries, rooftop events, corporate gatherings &amp; romantic dinners.</div>
@@ -547,7 +540,7 @@ body {
   </div>
 </div>
 
-<!-- ═══ FOOTER / CTA ═══ -->
+<!-- ═══ FOOTER ═══ -->
 <div class="footer">
   <div class="footer-cta">Ready to Celebrate? Let's Confirm Your Booking.</div>
   <div class="contact-row">
@@ -570,8 +563,8 @@ body {
   </div>
   <div class="footer-address">📍 Mukundapur, Near Ruby Hospital, EM Bypass, Kolkata</div>
   <div class="validity-note">
-    This proposal is valid for 7 days from ${today}.
-    Slot availability is subject to advance payment receipt.
+    This proposal is valid for 7 days from ${today}. Valid until ${validTill}.
+    Slot confirmed only upon advance payment receipt.
     BookMySpaces reserves the right to release the date if advance is not received within this period.
   </div>
 </div>
@@ -584,7 +577,7 @@ body {
     This proposal has been generated through the BookMySpaces Proposal System and is valid without a physical signature.<br>
     For modifications or customisations, please contact our team directly.
   </div>
-  <div class="closing-ref">Proposal Reference: ${(proposal as any).proposal_number || 'DRAFT'}</div>
+  <div class="closing-ref">Proposal Reference: ${propNum}</div>
 </div>
 
 </div>
