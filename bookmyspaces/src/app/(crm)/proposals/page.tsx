@@ -7,7 +7,7 @@ import {
   AlertTriangle, Flame, RefreshCw, Download, MessageSquare,
   Mail, Copy, Phone, TrendingUp, Zap, ChevronDown, ChevronUp,
   BarChart3, Filter, Search, Plus, IndianRupee, Receipt,
-  X, Loader2,
+  X, Loader2, BookOpen, Wallet,
 } from 'lucide-react'
 import {
   computeProposalUrgency,
@@ -65,6 +65,20 @@ interface LeadSnapshotRaw {
   estimated_revenue:number|null; budget:string|null; event_type:string|null; venue:string|null
 }
 
+// ─── Payment record shape (from GET /api/proposals/[id]/payment) ──────────────
+
+interface PaymentRecord {
+  id             : string
+  receipt_number : string
+  amount         : number
+  payment_date   : string
+  payment_mode   : string
+  transaction_ref: string|null
+  notes          : string|null
+  payment_type   : string
+  created_at     : string
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatINR(n:number):string {
@@ -73,12 +87,32 @@ function formatINR(n:number):string {
   return `₹${n}`
 }
 
+function fmtINRFull(n:number):string {
+  return '₹' + Number(n).toLocaleString('en-IN')
+}
+
+function fmtDate(iso:string|null|undefined):string {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}) }
+  catch { return iso }
+}
+
 function timeAgo(iso:string|null):string {
   if (!iso) return '—'
   const mins=Math.floor((Date.now()-new Date(iso).getTime())/60_000)
   if (mins<60)   return `${mins}m ago`
   if (mins<1440) return `${Math.floor(mins/60)}h ago`
   return `${Math.floor(mins/1440)}d ago`
+}
+
+function modeLabel(m:string):string {
+  const map:Record<string,string>={cash:'Cash',upi:'UPI',card:'Card',bank_transfer:'Bank Transfer',cheque:'Cheque'}
+  return map[m]??m
+}
+
+function modeIcon(m:string):string {
+  const map:Record<string,string>={upi:'📱',cash:'💵',card:'💳',bank_transfer:'🏦',cheque:'📄'}
+  return map[m]??'💰'
 }
 
 function toLeadSnapshot(raw:LeadSnapshotRaw|null):LeadSnapshot {
@@ -129,52 +163,57 @@ const RISK_CONFIG:Record<RiskLevel,{label:string;color:string}> = {
   critical:{label:'Critical',   color:'text-red-700 bg-red-50 border border-red-200'},
 }
 
-// ─── Record Payment Modal ─────────────────────────────────────────────────────
+// ─── Shared modal shell ───────────────────────────────────────────────────────
+
+function ModalShell({title,sub,onClose,children}:{
+  title:string; sub:string; onClose:()=>void; children:React.ReactNode
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-4 bg-gray-900 text-white flex-shrink-0">
+          <div>
+            <p className="text-xs text-gray-400 mb-0.5">{sub}</p>
+            <p className="text-sm font-bold">{title}</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
+            <X className="w-4 h-4"/>
+          </button>
+        </div>
+        <div className="overflow-y-auto flex-1">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Record Payment Modal (UNCHANGED) ────────────────────────────────────────
 
 function PaymentModal({
-  proposal,
-  onClose,
-  onSuccess,
+  proposal, onClose, onSuccess,
 }: {
-  proposal : ProposalWithLead
-  onClose  : () => void
-  onSuccess: () => void
+  proposal:ProposalWithLead; onClose:()=>void; onSuccess:()=>void
 }) {
-  const [amount,  setAmount]  = useState('')
-  const [date,    setDate]    = useState(new Date().toISOString().slice(0,10))
-  const [mode,    setMode]    = useState('upi')
-  const [ref,     setRef]     = useState('')
-  const [notes,   setNotes]   = useState('')
-  const [type,    setType]    = useState('advance')
-  const [saving,  setSaving]  = useState(false)
-  const [error,   setError]   = useState<string|null>(null)
+  const [amount, setAmount] = useState('')
+  const [date,   setDate]   = useState(new Date().toISOString().slice(0,10))
+  const [mode,   setMode]   = useState('upi')
+  const [ref,    setRef]    = useState('')
+  const [notes,  setNotes]  = useState('')
+  const [type,   setType]   = useState('advance')
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string|null>(null)
 
   async function submit(e:React.FormEvent) {
     e.preventDefault()
-    if (!amount || parseFloat(amount)<=0) { setError('Enter a valid amount'); return }
+    if (!amount||parseFloat(amount)<=0){setError('Enter a valid amount');return}
     setSaving(true)
     try {
-      const res = await fetch(`/api/proposals/${proposal.id}/payment`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          amount:parseFloat(amount),
-          payment_date:date,
-          payment_mode:mode,
-          transaction_ref:ref||null,
-          notes:notes||null,
-          payment_type:type,
-        }),
+      const res=await fetch(`/api/proposals/${proposal.id}/payment`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({amount:parseFloat(amount),payment_date:date,payment_mode:mode,transaction_ref:ref||null,notes:notes||null,payment_type:type}),
       })
-      if (!res.ok) {
-        const d = await res.json().catch(()=>({}))
-        throw new Error(d.error??`Error ${res.status}`)
-      }
+      if (!res.ok){const d=await res.json().catch(()=>({}));throw new Error(d.error??`Error ${res.status}`)}
       onSuccess()
-    } catch(err:any) {
-      setError(err.message??'Failed to record payment')
-      setSaving(false)
-    }
+    } catch(err:any){setError(err.message??'Failed to record payment');setSaving(false)}
   }
 
   return (
@@ -185,16 +224,10 @@ function PaymentModal({
             <p className="text-xs text-gray-400 mb-0.5">Record Payment</p>
             <p className="text-sm font-bold">{proposal.client_name} · {proposal.proposal_number}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
-            <X className="w-4 h-4"/>
-          </button>
+          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"><X className="w-4 h-4"/></button>
         </div>
-
         <form onSubmit={submit} className="p-5 space-y-4">
-          {error && (
-            <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{error}</div>
-          )}
-
+          {error&&<div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{error}</div>}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Amount (₹) *</label>
@@ -207,16 +240,13 @@ function PaymentModal({
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
             </div>
           </div>
-
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Payment Mode</label>
               <select value={mode} onChange={e=>setMode(e.target.value)}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white">
-                <option value="upi">UPI</option>
-                <option value="cash">Cash</option>
-                <option value="card">Card</option>
-                <option value="bank_transfer">Bank Transfer</option>
+                <option value="upi">UPI</option><option value="cash">Cash</option>
+                <option value="card">Card</option><option value="bank_transfer">Bank Transfer</option>
                 <option value="cheque">Cheque</option>
               </select>
             </div>
@@ -224,36 +254,32 @@ function PaymentModal({
               <label className="block text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Payment Type</label>
               <select value={type} onChange={e=>setType(e.target.value)}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white">
-                <option value="advance">Advance</option>
-                <option value="partial">Partial</option>
+                <option value="advance">Advance</option><option value="partial">Partial</option>
                 <option value="final">Final Payment</option>
               </select>
             </div>
           </div>
-
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Transaction Reference</label>
             <input type="text" value={ref} onChange={e=>setRef(e.target.value)} placeholder="UPI ref / cheque no."
               className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"/>
           </div>
-
           <div>
             <label className="block text-xs font-semibold text-gray-500 uppercase tracking-widest mb-1.5">Notes</label>
             <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={2} placeholder="Optional notes…"
               className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"/>
           </div>
-
-          {proposal.total_price && (
+          {proposal.total_price&&(
             <div className="bg-gray-50 rounded-xl px-4 py-3 text-xs space-y-1">
               <div className="flex justify-between text-gray-500">
                 <span>Proposal Total</span><span className="font-medium text-gray-700">{formatINR(proposal.total_price)}</span>
               </div>
-              {(proposal.advance_paid??0) > 0 && (
+              {(proposal.advance_paid??0)>0&&(
                 <div className="flex justify-between text-blue-600">
                   <span>Already Paid</span><span className="font-medium">− {formatINR(proposal.advance_paid??0)}</span>
                 </div>
               )}
-              {amount && parseFloat(amount)>0 && (
+              {amount&&parseFloat(amount)>0&&(
                 <div className="flex justify-between text-green-600 border-t border-gray-200 pt-1 mt-1">
                   <span>Balance After This</span>
                   <span className="font-bold">{formatINR(Math.max(0,(proposal.total_price??0)-(proposal.advance_paid??0)-parseFloat(amount)))}</span>
@@ -261,15 +287,12 @@ function PaymentModal({
               )}
             </div>
           )}
-
           <div className="flex gap-3 pt-1">
             <button type="button" onClick={onClose}
-              className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">
-              Cancel
-            </button>
+              className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
             <button type="submit" disabled={saving}
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-gray-900 text-white rounded-xl text-sm font-bold hover:bg-gray-800 disabled:opacity-60">
-              {saving ? <><Loader2 className="w-4 h-4 animate-spin"/>Saving…</> : <><IndianRupee className="w-4 h-4"/>Record Payment</>}
+              {saving?<><Loader2 className="w-4 h-4 animate-spin"/>Saving…</>:<><IndianRupee className="w-4 h-4"/>Record Payment</>}
             </button>
           </div>
         </form>
@@ -278,9 +301,298 @@ function PaymentModal({
   )
 }
 
+// ─── NEW: Advance Receipts Modal ──────────────────────────────────────────────
+
+function ReceiptsModal({proposal, onClose}:{proposal:ProposalWithLead; onClose:()=>void}) {
+  const [payments, setPayments] = useState<PaymentRecord[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState<string|null>(null)
+
+  useEffect(()=>{
+    setLoading(true)
+    fetch(`/api/proposals/${proposal.id}/payment`)
+      .then(r=>r.json())
+      .then(d=>{
+        setPayments(Array.isArray(d.payments)?d.payments:[])
+        setLoading(false)
+      })
+      .catch(()=>{setError('Failed to load payments');setLoading(false)})
+  },[proposal.id])
+
+  return (
+    <ModalShell
+      title={`Advance Receipts — ${proposal.proposal_number}`}
+      sub={proposal.client_name??''}
+      onClose={onClose}
+    >
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="w-5 h-5 animate-spin text-gray-400"/>
+        </div>
+      ) : error ? (
+        <div className="p-5 text-sm text-red-600">{error}</div>
+      ) : payments.length === 0 ? (
+        <div className="p-8 text-center">
+          <Receipt className="w-10 h-10 text-gray-200 mx-auto mb-3"/>
+          <p className="text-sm text-gray-400 font-medium">No payments recorded yet.</p>
+          <p className="text-xs text-gray-300 mt-1">Receipts will appear here after recording a payment.</p>
+        </div>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {/* Summary header */}
+          <div className="px-5 py-3 bg-gray-50 flex items-center justify-between">
+            <span className="text-xs text-gray-500">{payments.length} payment{payments.length!==1?'s':''} recorded</span>
+            <span className="text-xs font-bold text-emerald-700">
+              Total: {fmtINRFull(payments.reduce((s,p)=>s+Number(p.amount),0))}
+            </span>
+          </div>
+
+          {payments.map((p,i)=>(
+            <div key={p.id} className="px-5 py-4">
+              {/* Row header */}
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-base">{modeIcon(p.payment_mode)}</span>
+                  <div>
+                    <p className="text-xs font-bold text-gray-800 font-mono tracking-wide">{p.receipt_number}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{fmtDate(p.payment_date)}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-base font-black text-gray-900">{fmtINRFull(Number(p.amount))}</p>
+                  <p className="text-xs text-gray-400 capitalize mt-0.5">{modeLabel(p.payment_mode)}</p>
+                </div>
+              </div>
+
+              {/* Meta row */}
+              <div className="flex items-center gap-2 flex-wrap mb-3">
+                <span className="inline-flex items-center px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full border border-gray-200 capitalize">
+                  {(p.payment_type||'advance').replace('_',' ')}
+                </span>
+                {p.transaction_ref && (
+                  <span className="inline-flex items-center px-2 py-0.5 bg-blue-50 text-blue-700 text-xs rounded-full border border-blue-200 font-mono">
+                    {p.transaction_ref}
+                  </span>
+                )}
+                {p.notes && (
+                  <span className="text-xs text-gray-400 italic truncate max-w-[180px]">{p.notes}</span>
+                )}
+              </div>
+
+              {/* Action buttons */}
+              <div className="flex gap-2">
+                <button
+                  onClick={()=>window.open(`/api/proposals/${proposal.id}/receipt?payment_id=${p.id}`,'_blank')}
+                  className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-teal-50 text-teal-700 border border-teal-200 rounded-lg text-xs font-semibold hover:bg-teal-100 transition-colors">
+                  <Receipt className="w-3.5 h-3.5"/> View Receipt
+                </button>
+                <button
+                  onClick={()=>window.open(`/api/proposals/${proposal.id}/receipt?payment_id=${p.id}&print=1`,'_blank')}
+                  className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-gray-100 text-gray-700 border border-gray-200 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors">
+                  🖨 Print
+                </button>
+              </div>
+
+              {i < payments.length-1 && <div className="mt-4 border-b border-dashed border-gray-100"/>}
+            </div>
+          ))}
+        </div>
+      )}
+    </ModalShell>
+  )
+}
+
+// ─── NEW: Financial Documents Modal ──────────────────────────────────────────
+
+function FinanceModal({proposal, onClose}:{proposal:ProposalWithLead; onClose:()=>void}) {
+  const [payments,     setPayments]     = useState<PaymentRecord[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [error,        setError]        = useState<string|null>(null)
+
+  useEffect(()=>{
+    setLoading(true)
+    fetch(`/api/proposals/${proposal.id}/payment`)
+      .then(r=>r.json())
+      .then(d=>{
+        setPayments(Array.isArray(d.payments)?d.payments:[])
+        setLoading(false)
+      })
+      .catch(()=>{setError('Failed to load payment data');setLoading(false)})
+  },[proposal.id])
+
+  const totalReceived = payments.reduce((s,p)=>s+Number(p.amount),0)
+  const grandTotal    = Number(proposal.total_price??0)
+  const balanceDue    = Math.max(0, grandTotal - totalReceived)
+  const isFullyPaid   = balanceDue <= 0
+
+  return (
+    <ModalShell
+      title="Financial Documents"
+      sub={`${proposal.proposal_number} — ${proposal.client_name}`}
+      onClose={onClose}
+    >
+      <div className="p-5 space-y-4">
+
+        {/* Financial summary card */}
+        <div className="bg-gray-900 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-white/10">
+            <p className="text-xs text-gray-400 font-semibold uppercase tracking-widest">Financial Summary</p>
+            <p className="text-xs text-gray-500 mt-0.5">{proposal.proposal_number}</p>
+          </div>
+          <div className="px-4 py-3 space-y-2">
+            <div className="flex justify-between items-center">
+              <span className="text-xs text-gray-400">Grand Total</span>
+              <span className="text-sm font-bold text-white">{fmtINRFull(grandTotal)}</span>
+            </div>
+            {loading ? (
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <Loader2 className="w-3 h-3 animate-spin"/> Loading payments…
+              </div>
+            ) : error ? (
+              <p className="text-xs text-red-400">{error}</p>
+            ) : (
+              <>
+                <div className="flex justify-between items-center">
+                  <span className="text-xs text-gray-400">
+                    Amount Received
+                    {payments.length>0&&<span className="ml-1 text-gray-600">({payments.length} payment{payments.length!==1?'s':''})</span>}
+                  </span>
+                  <span className="text-sm font-bold text-emerald-400">{fmtINRFull(totalReceived)}</span>
+                </div>
+                <div className="h-px bg-white/10 my-1"/>
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold text-gray-300">{isFullyPaid?'✓ Fully Settled':'Balance Due'}</span>
+                  <span className={`text-base font-black ${isFullyPaid?'text-emerald-400':'text-amber-400'}`}>
+                    {fmtINRFull(balanceDue)}
+                  </span>
+                </div>
+              </>
+            )}
+          </div>
+          {!loading && !error && payments.length > 0 && (
+            <div className="px-4 pb-3">
+              <div className="bg-white/5 rounded-lg p-2.5 space-y-1.5">
+                <p className="text-xs text-gray-500 uppercase tracking-widest mb-1">Payment History</p>
+                {payments.map(p=>(
+                  <div key={p.id} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-gray-500 font-mono">{p.receipt_number}</span>
+                      <span className="text-gray-600">{fmtDate(p.payment_date)}</span>
+                      <span className="text-gray-600">{modeLabel(p.payment_mode)}</span>
+                    </div>
+                    <span className="text-white font-semibold">{fmtINRFull(Number(p.amount))}</span>
+                  </div>
+                ))}
+                <div className="h-px bg-white/10 mt-1 pt-1">
+                  <div className="flex justify-between text-xs pt-1">
+                    <span className="text-gray-400 font-semibold">Total Received</span>
+                    <span className="text-emerald-400 font-bold">{fmtINRFull(totalReceived)}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Document actions */}
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Generate Documents</p>
+
+          {/* Latest Invoice */}
+          <button
+            onClick={()=>window.open(`/api/proposals/${proposal.id}/invoice`,'_blank')}
+            className="w-full flex items-center justify-between px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition-colors group">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-100 rounded-lg group-hover:bg-amber-200 transition-colors">
+                <FileText className="w-4 h-4 text-amber-700"/>
+              </div>
+              <div className="text-left">
+                <p className="text-sm font-bold text-amber-900">Generate Latest Invoice</p>
+                <p className="text-xs text-amber-600 mt-0.5">
+                  {loading ? 'Loading…' : `Shows ${fmtINRFull(grandTotal)} total · ${fmtINRFull(totalReceived)} received · ${fmtINRFull(balanceDue)} due`}
+                </p>
+              </div>
+            </div>
+            <Download className="w-4 h-4 text-amber-500"/>
+          </button>
+
+          {/* Consolidated Statement = invoice with print=1 */}
+          <button
+            onClick={()=>window.open(`/api/proposals/${proposal.id}/invoice?print=1`,'_blank')}
+            className="w-full flex items-center justify-between px-4 py-3 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition-colors group">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 rounded-lg group-hover:bg-blue-200 transition-colors">
+                <BookOpen className="w-4 h-4 text-blue-700"/>
+              </div>
+              <div className="text-left">
+                <p className="text-sm font-bold text-blue-900">Generate Consolidated Statement</p>
+                <p className="text-xs text-blue-600 mt-0.5">Full invoice with complete payment history — ready to print</p>
+              </div>
+            </div>
+            <Download className="w-4 h-4 text-blue-500"/>
+          </button>
+
+          {/* Print Outstanding Balance */}
+          {!isFullyPaid && (
+            <button
+              onClick={()=>{
+                const w=window.open('','_blank')
+                if (!w) return
+                w.document.write(`<!DOCTYPE html><html><head><title>Outstanding Balance</title>
+<style>
+  body{font-family:system-ui,sans-serif;padding:40px;color:#1a1a1a;max-width:500px;margin:0 auto}
+  h1{font-size:22px;margin-bottom:4px}
+  .sub{font-size:13px;color:#6a6a7a;margin-bottom:24px}
+  .row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f0f0;font-size:14px}
+  .total{font-size:20px;font-weight:700;margin-top:12px}
+  .ref{font-size:11px;color:#9a9aaa;margin-top:20px}
+  @media print{@page{margin:20mm}}
+</style></head><body>
+<h1>Outstanding Balance Notice</h1>
+<div class="sub">${proposal.client_name} · ${proposal.proposal_number}</div>
+<div class="row"><span>Booking Value</span><span>${fmtINRFull(grandTotal)}</span></div>
+<div class="row"><span>Amount Received</span><span style="color:#15803d">${fmtINRFull(totalReceived)}</span></div>
+<div class="row total"><span>Balance Due</span><span style="color:#d97706">${fmtINRFull(balanceDue)}</span></div>
+<div class="ref">BookMySpaces · ${proposal.proposal_number} · ${new Date().toLocaleDateString('en-IN')}</div>
+<script>setTimeout(()=>window.print(),500)</script>
+</body></html>`)
+                w.document.close()
+              }}
+              className="w-full flex items-center justify-between px-4 py-3 bg-orange-50 border border-orange-200 rounded-xl hover:bg-orange-100 transition-colors group">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-orange-100 rounded-lg group-hover:bg-orange-200 transition-colors">
+                  <Wallet className="w-4 h-4 text-orange-700"/>
+                </div>
+                <div className="text-left">
+                  <p className="text-sm font-bold text-orange-900">Print Outstanding Balance</p>
+                  <p className="text-xs text-orange-600 mt-0.5">
+                    Quick notice — Balance due: <strong>{fmtINRFull(balanceDue)}</strong>
+                  </p>
+                </div>
+              </div>
+              <Download className="w-4 h-4 text-orange-500"/>
+            </button>
+          )}
+
+          {isFullyPaid && (
+            <div className="flex items-center gap-3 px-4 py-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0"/>
+              <div>
+                <p className="text-sm font-bold text-emerald-800">Fully Settled</p>
+                <p className="text-xs text-emerald-600">All payments received. No outstanding balance.</p>
+              </div>
+            </div>
+          )}
+        </div>
+
+      </div>
+    </ModalShell>
+  )
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function StatusPill({ status }:{status:ProposalStatus}) {
+function StatusPill({status}:{status:ProposalStatus}) {
   const cfg=STATUS_CONFIG[status]; const Icon=cfg.icon
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${cfg.pill}`}>
@@ -289,8 +601,8 @@ function StatusPill({ status }:{status:ProposalStatus}) {
   )
 }
 
-function PaymentPill({ status }:{status:PaymentStatus|null}) {
-  if (!status || status==='pending') return null
+function PaymentPill({status}:{status:PaymentStatus|null}) {
+  if (!status||status==='pending') return null
   const cfg=PAYMENT_CONFIG[status]
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border ${cfg.color}`}>
@@ -333,13 +645,13 @@ function IntelligencePanel({proposal,urgency,onAction}:{
         <div className="flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-blue-600"/>
           <span className="text-sm font-bold text-gray-900">Intelligence</span>
-          {urgency.escalationRequired && (
+          {urgency.escalationRequired&&(
             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-600 text-white text-xs font-bold rounded animate-pulse">
               <AlertTriangle className="w-2.5 h-2.5"/> PRIORITY
             </span>
           )}
         </div>
-        {urgency.riskLevel && (
+        {urgency.riskLevel&&(
           <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${RISK_CONFIG[urgency.riskLevel].color}`}>
             {RISK_CONFIG[urgency.riskLevel].label}
           </span>
@@ -373,7 +685,7 @@ function IntelligencePanel({proposal,urgency,onAction}:{
             </p>
           </div>
         </div>
-        {urgency.recommendation && (
+        {urgency.recommendation&&(
           <div className="bg-blue-50 rounded-lg p-2.5 border border-blue-100">
             <p className="text-xs font-semibold text-blue-700 mb-0.5">Recommendation</p>
             <p className="text-xs text-blue-600">{urgency.recommendation}</p>
@@ -393,17 +705,19 @@ function IntelligencePanel({proposal,urgency,onAction}:{
 
 // ─── Proposal card ────────────────────────────────────────────────────────────
 
-function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
-  proposal:ProposalWithLead
-  onAction:(action:string,proposalId:string)=>void
-  onStatusUpdate:(id:string,status:ProposalStatus)=>void
-  onPayment:(proposal:ProposalWithLead)=>void
+function ProposalCard({proposal,onAction,onStatusUpdate,onPayment,onReceipts,onFinance}:{
+  proposal       : ProposalWithLead
+  onAction       : (action:string,proposalId:string)=>void
+  onStatusUpdate : (id:string,status:ProposalStatus)=>void
+  onPayment      : (proposal:ProposalWithLead)=>void
+  onReceipts     : (proposal:ProposalWithLead)=>void   // NEW
+  onFinance      : (proposal:ProposalWithLead)=>void   // NEW
 }) {
   const [expanded,setExpanded]=useState(false)
-  const lead=toLeadSnapshot(proposal.leads)
-  const snap=toProposalSnapshot(proposal)
-  const urgency=computeProposalUrgency(snap,lead)
-  const temp=proposal.leads?.lead_temperature
+  const lead    = toLeadSnapshot(proposal.leads)
+  const snap    = toProposalSnapshot(proposal)
+  const urgency = computeProposalUrgency(snap,lead)
+  const temp    = proposal.leads?.lead_temperature
 
   const borderColor=
     urgency.riskLevel==='critical'?'border-l-red-500':
@@ -412,6 +726,7 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
 
   const isAccepted = proposal.status==='accepted'
   const payStatus  = proposal.payment_status ?? 'pending'
+  const hasPaid    = (proposal.advance_paid??0) > 0
 
   return (
     <div className={`bg-white rounded-xl border border-gray-200 border-l-4 ${borderColor} overflow-hidden transition-shadow hover:shadow-md`}>
@@ -420,9 +735,9 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-sm font-bold text-gray-900 truncate">{proposal.client_name??'Unknown Client'}</span>
-              {proposal.proposal_number && <span className="text-xs text-gray-400 font-mono">{proposal.proposal_number}</span>}
-              {temp==='HOT' && <span className="inline-flex items-center gap-0.5 text-xs font-semibold text-red-600"><Flame className="w-3 h-3"/> HOT</span>}
-              {urgency.escalationRequired && (
+              {proposal.proposal_number&&<span className="text-xs text-gray-400 font-mono">{proposal.proposal_number}</span>}
+              {temp==='HOT'&&<span className="inline-flex items-center gap-0.5 text-xs font-semibold text-red-600"><Flame className="w-3 h-3"/> HOT</span>}
+              {urgency.escalationRequired&&(
                 <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-red-600 text-white text-xs font-bold rounded">
                   <AlertTriangle className="w-2.5 h-2.5"/> PRIORITY
                 </span>
@@ -431,39 +746,54 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
             <div className="flex items-center gap-2 mt-0.5 flex-wrap">
               <StatusPill status={proposal.status}/>
               <PaymentPill status={payStatus}/>
-              {proposal.event_type && <span className="text-xs text-gray-500 capitalize">{proposal.event_type}</span>}
-              {proposal.event_date && (
+              {proposal.event_type&&<span className="text-xs text-gray-500 capitalize">{proposal.event_type}</span>}
+              {proposal.event_date&&(
                 <span className="text-xs text-gray-400">
                   {new Date(proposal.event_date).toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'})}
                 </span>
               )}
             </div>
           </div>
+
+          {/* Right column — value + finance summary */}
           <div className="text-right flex-shrink-0">
-            {proposal.total_price && <p className="text-base font-black text-gray-900">{formatINR(proposal.total_price)}</p>}
-            {isAccepted && (proposal.balance_due??0)>0 && (
-              <p className="text-xs text-amber-600 font-semibold">Due: {formatINR(proposal.balance_due??0)}</p>
+            {proposal.total_price&&<p className="text-base font-black text-gray-900">{formatINR(proposal.total_price)}</p>}
+            {isAccepted&&hasPaid&&(
+              <div className="mt-1 space-y-0.5">
+                <p className="text-xs text-emerald-600 font-medium">
+                  Paid: {formatINR(proposal.advance_paid??0)}
+                </p>
+                {(proposal.balance_due??0)>0
+                  ? <p className="text-xs text-amber-600 font-semibold">Due: {formatINR(proposal.balance_due??0)}</p>
+                  : <p className="text-xs text-emerald-700 font-bold">✓ Settled</p>
+                }
+              </div>
             )}
-            {isAccepted && (proposal.advance_paid??0)>0 && (
-              <p className="text-xs text-emerald-600">Paid: {formatINR(proposal.advance_paid??0)}</p>
-            )}
-            {proposal.guest_count && <p className="text-xs text-gray-400">{proposal.guest_count} guests</p>}
+            {proposal.guest_count&&<p className="text-xs text-gray-400 mt-1">{proposal.guest_count} guests</p>}
           </div>
         </div>
         <div className="mb-2"><UrgencyBar score={urgency.urgencyScore}/></div>
         <div className="flex items-center gap-3 text-xs text-gray-500">
-          {proposal.sent_at && <span className="flex items-center gap-1"><Send className="w-3 h-3"/>{timeAgo(proposal.sent_at)}</span>}
-          {(proposal.viewed_count??0)>0 && (
+          {proposal.sent_at&&<span className="flex items-center gap-1"><Send className="w-3 h-3"/>{timeAgo(proposal.sent_at)}</span>}
+          {(proposal.viewed_count??0)>0&&(
             <span className="flex items-center gap-1 text-blue-600 font-medium">
               <Eye className="w-3 h-3"/>{proposal.viewed_count} view{proposal.viewed_count!==1?'s':''}
             </span>
           )}
-          {proposal.last_viewed_at && <span className="flex items-center gap-1"><Clock className="w-3 h-3"/>last {timeAgo(proposal.last_viewed_at)}</span>}
+          {proposal.last_viewed_at&&<span className="flex items-center gap-1"><Clock className="w-3 h-3"/>last {timeAgo(proposal.last_viewed_at)}</span>}
+          {/* Quick finance summary inline — shown when accepted and has payments */}
+          {isAccepted&&hasPaid&&(
+            <span className="ml-auto text-xs text-gray-400">
+              {formatINR(proposal.total_price??0)} · {formatINR(proposal.advance_paid??0)} paid
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Action strip */}
+      {/* ── Action strip ─────────────────────────────────────────────────── */}
       <div className="px-4 py-2 bg-gray-50/60 border-t border-gray-100 flex items-center gap-1.5 flex-wrap">
+
+        {/* Standard actions — always visible */}
         <button onClick={()=>onAction('send_via_whatsapp',proposal.id)}
           className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-semibold hover:bg-green-100 transition-colors">
           <MessageSquare className="w-3 h-3"/> WhatsApp
@@ -481,29 +811,35 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
           <Copy className="w-3 h-3"/> Copy Link
         </button>
 
-        {/* Payment actions — shown when accepted */}
+        {/* Payment actions — accepted proposals only */}
         {isAccepted && (
           <>
+            {/* Record Payment */}
             <button onClick={()=>onPayment(proposal)}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 transition-colors">
               <IndianRupee className="w-3 h-3"/> Record Payment
             </button>
-            {(proposal.advance_paid??0)>0 && (
-              <>
-                <button onClick={()=>window.open(`/api/proposals/${proposal.id}/receipt`,'_blank')}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-lg text-xs font-semibold hover:bg-teal-100 transition-colors">
-                  <Receipt className="w-3 h-3"/> Receipt
-                </button>
-                <button onClick={()=>window.open(`/api/proposals/${proposal.id}/invoice`,'_blank')}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 transition-colors">
-                  <FileText className="w-3 h-3"/> Invoice
-                </button>
-              </>
-            )}
+
+            {/* ── NEW: Advance Receipts ── */}
+            <button onClick={()=>onReceipts(proposal)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-teal-50 text-teal-700 border border-teal-200 rounded-lg text-xs font-semibold hover:bg-teal-100 transition-colors">
+              <Receipt className="w-3 h-3"/> Advance Receipts
+              {hasPaid&&(
+                <span className="ml-0.5 bg-teal-200 text-teal-800 text-xs font-bold px-1 py-0 rounded-full leading-4">
+                  ✓
+                </span>
+              )}
+            </button>
+
+            {/* ── NEW: Financial Documents ── */}
+            <button onClick={()=>onFinance(proposal)}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 transition-colors">
+              <Wallet className="w-3 h-3"/> Financial Documents
+            </button>
           </>
         )}
 
-        {!isAccepted && (
+        {!isAccepted&&(
           <button onClick={()=>onStatusUpdate(proposal.id,'accepted')}
             className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors ml-auto">
             <CheckCircle2 className="w-3 h-3"/> Mark Accepted
@@ -516,23 +852,24 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
         </button>
       </div>
 
-      {expanded && (
+      {/* Intelligence panel */}
+      {expanded&&(
         <div className="px-4 pb-4 pt-2 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-4">
           <IntelligencePanel proposal={proposal} urgency={urgency} onAction={onAction}/>
           <div className="space-y-3">
-            {proposal.ai_summary && (
+            {proposal.ai_summary&&(
               <div>
                 <p className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">AI Summary</p>
                 <p className="text-sm text-gray-700 leading-relaxed">{proposal.ai_summary}</p>
               </div>
             )}
-            {proposal.urgency_cta && (
+            {proposal.urgency_cta&&(
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                 <p className="text-xs font-bold text-amber-700 mb-1">Urgency Message</p>
                 <p className="text-xs text-amber-600">{proposal.urgency_cta}</p>
               </div>
             )}
-            {proposal.client_phone && (
+            {proposal.client_phone&&(
               <a href={`tel:${proposal.client_phone}`}
                 className="inline-flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-xs font-semibold hover:bg-gray-200 transition-colors w-full justify-center">
                 <Phone className="w-3.5 h-3.5"/> Call {proposal.client_name??'Client'}
@@ -548,13 +885,17 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment}:{
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ProposalsPage() {
-  const [proposals,   setProposals]   = useState<ProposalWithLead[]>([])
-  const [loading,     setLoading]     = useState(true)
-  const [filter,      setFilter]      = useState<FilterTab>('all')
-  const [search,      setSearch]      = useState('')
-  const [sortBy,      setSortBy]      = useState<'urgency'|'created'|'value'>('urgency')
-  const [lastRefresh, setLastRefresh] = useState(new Date())
-  const [payModal,    setPayModal]    = useState<ProposalWithLead|null>(null)
+  const [proposals,    setProposals]    = useState<ProposalWithLead[]>([])
+  const [loading,      setLoading]      = useState(true)
+  const [filter,       setFilter]       = useState<FilterTab>('all')
+  const [search,       setSearch]       = useState('')
+  const [sortBy,       setSortBy]       = useState<'urgency'|'created'|'value'>('urgency')
+  const [lastRefresh,  setLastRefresh]  = useState(new Date())
+
+  // ── Modal state ────────────────────────────────────────────────────────
+  const [payModal,      setPayModal]      = useState<ProposalWithLead|null>(null)
+  const [receiptsModal, setReceiptsModal] = useState<ProposalWithLead|null>(null) // NEW
+  const [financeModal,  setFinanceModal]  = useState<ProposalWithLead|null>(null) // NEW
 
   const fetchProposals = useCallback(async()=>{
     setLoading(true)
@@ -572,7 +913,7 @@ export default function ProposalsPage() {
   async function handleStatusUpdate(id:string,status:ProposalStatus) {
     try {
       await fetch('/api/proposals',{
-        method:'PATCH', headers:{'Content-Type':'application/json'},
+        method:'PATCH',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id,status,...(status==='accepted'?{accepted_at:new Date().toISOString()}:{})}),
       })
       setProposals(prev=>prev.map(p=>p.id===id?{...p,status}:p))
@@ -597,7 +938,7 @@ export default function ProposalsPage() {
     }
   }
 
-  // ── Derived stats ──────────────────────────────────────────────────────
+  // ── Derived stats (UNCHANGED) ──────────────────────────────────────────
   const actionNeededCount = proposals.filter(p=>{
     const u=computeProposalUrgency(toProposalSnapshot(p),toLeadSnapshot(p.leads))
     return u.followUpRequired||u.resendRecommended||u.escalationRequired
@@ -609,7 +950,7 @@ export default function ProposalsPage() {
   const advanceTotal     = proposals.reduce((s,p)=>s+(p.advance_paid??0),0)
   const fullyPaidCount   = proposals.filter(p=>p.payment_status==='fully_paid').length
 
-  // ── Filter + sort ──────────────────────────────────────────────────────
+  // ── Filter + sort (UNCHANGED) ──────────────────────────────────────────
   const displayed = proposals
     .filter(p=>{
       const u=computeProposalUrgency(toProposalSnapshot(p),toLeadSnapshot(p.leads))
@@ -642,6 +983,7 @@ export default function ProposalsPage() {
   return (
     <div className="min-h-screen bg-gray-50/60">
 
+      {/* ── Modals ── */}
       {payModal && (
         <PaymentModal
           proposal={payModal}
@@ -649,8 +991,22 @@ export default function ProposalsPage() {
           onSuccess={()=>{ setPayModal(null); fetchProposals() }}
         />
       )}
+      {/* NEW: Advance Receipts modal */}
+      {receiptsModal && (
+        <ReceiptsModal
+          proposal={receiptsModal}
+          onClose={()=>setReceiptsModal(null)}
+        />
+      )}
+      {/* NEW: Financial Documents modal */}
+      {financeModal && (
+        <FinanceModal
+          proposal={financeModal}
+          onClose={()=>setFinanceModal(null)}
+        />
+      )}
 
-      {/* Header */}
+      {/* Header — UNCHANGED */}
       <header className="sticky top-0 z-20 bg-white/95 backdrop-blur border-b border-gray-200 px-6 py-3">
         <div className="max-w-screen-xl mx-auto flex items-center justify-between gap-4">
           <div>
@@ -662,7 +1018,7 @@ export default function ProposalsPage() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {actionNeededCount>0 && (
+            {actionNeededCount>0&&(
               <button onClick={()=>setFilter('action_needed')}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-bold animate-pulse hover:bg-red-700">
                 <AlertTriangle className="w-3.5 h-3.5"/> {actionNeededCount} need action
@@ -682,17 +1038,17 @@ export default function ProposalsPage() {
 
       <div className="max-w-screen-xl mx-auto px-6 py-5 space-y-5">
 
-        {/* KPI strip — 8 cards */}
+        {/* KPI strip — UNCHANGED */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            {label:'Total Proposals',    value:proposals.length,       icon:FileText,    color:'bg-gray-100 text-gray-600'},
-            {label:'Action Needed',      value:actionNeededCount,      icon:AlertTriangle,color:'bg-red-100 text-red-600'},
-            {label:'Pipeline Value',     value:formatINR(totalValue),  icon:TrendingUp,  color:'bg-blue-100 text-blue-600'},
-            {label:'Won Revenue',        value:formatINR(acceptedValue),icon:CheckCircle2,color:'bg-emerald-100 text-emerald-600'},
-            {label:'Outstanding',        value:formatINR(outstandingTotal),icon:AlertTriangle,color:'bg-amber-100 text-amber-600'},
-            {label:'Advance Received',   value:formatINR(advanceTotal),icon:IndianRupee, color:'bg-teal-100 text-teal-600'},
-            {label:'Fully Paid',         value:fullyPaidCount,         icon:CheckCircle2,color:'bg-green-100 text-green-600'},
-            {label:'Pending Invoice',    value:proposals.filter(p=>p.status==='accepted'&&p.payment_status!=='fully_paid').length,icon:Receipt,color:'bg-purple-100 text-purple-600'},
+            {label:'Total Proposals',  value:proposals.length,                                                                          icon:FileText,     color:'bg-gray-100 text-gray-600'},
+            {label:'Action Needed',    value:actionNeededCount,                                                                         icon:AlertTriangle,color:'bg-red-100 text-red-600'},
+            {label:'Pipeline Value',   value:formatINR(totalValue),                                                                     icon:TrendingUp,   color:'bg-blue-100 text-blue-600'},
+            {label:'Won Revenue',      value:formatINR(acceptedValue),                                                                  icon:CheckCircle2, color:'bg-emerald-100 text-emerald-600'},
+            {label:'Outstanding',      value:formatINR(outstandingTotal),                                                               icon:AlertTriangle,color:'bg-amber-100 text-amber-600'},
+            {label:'Advance Received', value:formatINR(advanceTotal),                                                                   icon:IndianRupee,  color:'bg-teal-100 text-teal-600'},
+            {label:'Fully Paid',       value:fullyPaidCount,                                                                            icon:CheckCircle2, color:'bg-green-100 text-green-600'},
+            {label:'Pending Invoice',  value:proposals.filter(p=>p.status==='accepted'&&p.payment_status!=='fully_paid').length,        icon:Receipt,      color:'bg-purple-100 text-purple-600'},
           ].map(card=>(
             <div key={card.label} className="bg-white rounded-xl border border-gray-200 p-4">
               <div className="flex items-start justify-between mb-2">
@@ -704,14 +1060,14 @@ export default function ProposalsPage() {
           ))}
         </div>
 
-        {/* Filters */}
+        {/* Filters — UNCHANGED */}
         <div className="bg-white rounded-2xl border border-gray-200 px-4 py-3">
           <div className="flex flex-wrap items-center gap-1.5 mb-3">
             {FILTER_TABS.map(f=>(
               <button key={f.id} onClick={()=>setFilter(f.id)}
                 className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${filter===f.id?'bg-blue-600 text-white shadow-sm':'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                 {f.label}
-                {f.count!==undefined && (
+                {f.count!==undefined&&(
                   <span className={`px-1.5 py-0.5 rounded-full text-xs font-bold ${filter===f.id?'bg-white/25 text-white':'bg-gray-200 text-gray-500'}`}>{f.count}</span>
                 )}
               </button>
@@ -754,12 +1110,14 @@ export default function ProposalsPage() {
                 onAction={handleAction}
                 onStatusUpdate={handleStatusUpdate}
                 onPayment={p=>setPayModal(p)}
+                onReceipts={p=>setReceiptsModal(p)}   // NEW
+                onFinance={p=>setFinanceModal(p)}      // NEW
               />
             ))}
           </div>
         )}
 
-        {displayed.length>0 && (
+        {displayed.length>0&&(
           <p className="text-xs text-gray-400 text-center py-2">
             {displayed.length} of {proposals.length} proposals · {formatINR(displayed.reduce((s,p)=>s+(p.total_price??0),0))} total value
           </p>

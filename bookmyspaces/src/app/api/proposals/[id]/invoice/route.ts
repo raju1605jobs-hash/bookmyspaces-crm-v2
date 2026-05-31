@@ -59,7 +59,9 @@ function buildInvoiceHTML(proposal: any, invoice: any, payments: any[]): string 
   const addons      = Array.isArray(proposal.addons)     ? proposal.addons     : []
   const discountAmt = Number(proposal.discount_amount    || 0)
   const totalPrice  = Number(proposal.total_price        || 0)
-  const advancePaid = Number(proposal.advance_paid || payments.reduce((s: number, p: any) => s + Number(p.amount || 0), 0))
+  // Always sum from the payments array — never read the stale proposal.advance_paid snapshot.
+  // This matches FinanceModal's logic exactly.
+  const advancePaid = payments.reduce((s: number, p: any) => s + Number(p.amount || 0), 0)
   const balanceDue  = Math.max(0, totalPrice - advancePaid)
   const roomsTotal  = roomItems.reduce((s: number, r: any) =>
     s + (Number(r.quantity||0) * Number(r.rate||0) * Number(r.nights||0)), 0)
@@ -67,7 +69,7 @@ function buildInvoiceHTML(proposal: any, invoice: any, payments: any[]): string 
   const hasEvent    = basePrice > 0
   const hasRooms    = roomItems.length > 0
   const totalWords  = amountInWords(totalPrice)
-  const paidTotal   = payments.reduce((s: number, p: any) => s + Number(p.amount||0), 0)
+  const paidTotal   = advancePaid  // same value — reuse, no second reduce
 
   const roomRowsHtml = roomItems.map((r: any) => `
     <tr>
@@ -443,6 +445,11 @@ export async function GET(
       .order('payment_date', { ascending: true })
 
     const allPayments = payments ?? []
+    console.log("=== INVOICE DEBUG ===")
+    console.log("PROPOSAL ID:", params.id)
+    console.log("PAYMENT COUNT:", allPayments.length)
+    console.log("PAYMENTS:", JSON.stringify(allPayments.map((p:any)=>({id:p.id,receipt:p.receipt_number,amount:p.amount,proposal_id:p.proposal_id}))))
+    console.log("TOTAL RECEIVED:", allPayments.reduce((s:number,p:any)=>s+Number(p.amount||0),0))
     const totalPaid   = allPayments.reduce((s: number, p: any) => s + Number(p.amount || 0), 0)
     const balanceDue  = Math.max(0, Number(proposal.total_price || 0) - totalPaid)
 
