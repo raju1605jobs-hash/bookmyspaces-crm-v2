@@ -1,4 +1,6 @@
 // src/app/api/proposals/[id]/receipt/route.ts
+// NO CHANGES to route URL, DB queries, or payment logic.
+// CHANGES: amount in words, booking summary, print button, auto-print.
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
@@ -6,14 +8,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
 function inr(n: number): string {
   return '₹' + Number(n).toLocaleString('en-IN')
 }
 
-function fmtDate(d: string): string {
+function fmtDate(d: string | null | undefined): string {
+  if (!d) return '—'
   try {
     return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
-  } catch { return d }
+  } catch { return String(d) }
 }
 
 function modeLabel(mode: string): string {
@@ -24,10 +29,48 @@ function modeLabel(mode: string): string {
   return map[mode] ?? mode
 }
 
+function modeIcon(mode: string): string {
+  const map: Record<string, string> = {
+    upi: '📱', cash: '💵', card: '💳',
+    bank_transfer: '🏦', cheque: '📄',
+  }
+  return map[mode] ?? '💰'
+}
+
+// ─── Amount in words ──────────────────────────────────────────────────────────
+
+function amountInWords(amount: number): string {
+  const ones = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven',
+    'Eight', 'Nine', 'Ten', 'Eleven', 'Twelve', 'Thirteen', 'Fourteen',
+    'Fifteen', 'Sixteen', 'Seventeen', 'Eighteen', 'Nineteen']
+  const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty',
+    'Sixty', 'Seventy', 'Eighty', 'Ninety']
+
+  function words(n: number): string {
+    if (n === 0) return ''
+    if (n < 20)  return ones[n]
+    if (n < 100) return tens[Math.floor(n / 10)] + (n % 10 !== 0 ? ' ' + ones[n % 10] : '')
+    if (n < 1000) return ones[Math.floor(n / 100)] + ' Hundred' + (n % 100 !== 0 ? ' ' + words(n % 100) : '')
+    if (n < 100000)  return words(Math.floor(n / 1000)) + ' Thousand' + (n % 1000 !== 0 ? ' ' + words(n % 1000) : '')
+    if (n < 10000000) return words(Math.floor(n / 100000)) + ' Lakh' + (n % 100000 !== 0 ? ' ' + words(n % 100000) : '')
+    return words(Math.floor(n / 10000000)) + ' Crore' + (n % 10000000 !== 0 ? ' ' + words(n % 10000000) : '')
+  }
+
+  const n = Math.round(amount)
+  if (n === 0) return 'Zero Rupees Only'
+  return 'Rupees ' + words(n).trim() + ' Only'
+}
+
+// ─── HTML builder ─────────────────────────────────────────────────────────────
+
 function buildReceiptHTML(proposal: any, payment: any): string {
-  const today = new Date().toLocaleDateString('en-IN', {
-    day: 'numeric', month: 'long', year: 'numeric'
-  })
+  const today      = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+  const amt        = Number(payment.amount)
+  const totalPrice = Number(proposal.total_price || 0)
+  const advancePaid = Number(proposal.advance_paid || amt)
+  const balanceDue  = Math.max(0, totalPrice - advancePaid)
+  const words       = amountInWords(amt)
+  const payType     = (payment.payment_type || 'advance').replace('_', ' ')
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -38,179 +81,249 @@ function buildReceiptHTML(proposal: any, payment: any): string {
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'DM Sans',system-ui,sans-serif;color:#1a1a1a;background:#fff;font-size:13px;line-height:1.5}
+body{font-family:'DM Sans',system-ui,sans-serif;color:#1a1a1a;background:#fff;font-size:12px;line-height:1.45}
 .page{max-width:600px;margin:0 auto}
 
-.header{background:linear-gradient(135deg,#0b1520 0%,#162038 100%);padding:24px 36px;display:flex;justify-content:space-between;align-items:flex-start}
-.brand-name{font-family:'Cormorant Garamond',serif;font-size:22px;color:#fff;font-weight:400;letter-spacing:.3px}
-.brand-tag{font-size:9px;color:#c9a84c;letter-spacing:.2em;text-transform:uppercase;margin-top:3px}
+/* ── Header ── */
+.header{background:linear-gradient(135deg,#0b1520 0%,#162038 100%);padding:18px 32px;display:flex;justify-content:space-between;align-items:flex-start}
+.brand-name{font-family:'Cormorant Garamond',serif;font-size:20px;color:#fff;font-weight:400;letter-spacing:.3px}
+.brand-tag{font-size:9px;color:#c9a84c;letter-spacing:.2em;text-transform:uppercase;margin-top:2px}
 .receipt-badge{text-align:right}
-.receipt-label{font-size:9px;color:rgba(255,255,255,.4);letter-spacing:.15em;text-transform:uppercase;margin-bottom:3px}
-.receipt-number{font-size:16px;font-weight:600;color:#c9a84c;letter-spacing:.05em}
-.receipt-date{font-size:10px;color:rgba(255,255,255,.4);margin-top:3px}
+.receipt-type{font-size:8.5px;color:rgba(255,255,255,.45);letter-spacing:.18em;text-transform:uppercase;margin-bottom:2px}
+.receipt-num{font-size:15px;font-weight:700;color:#c9a84c;letter-spacing:.06em}
+.receipt-date{font-size:9.5px;color:rgba(255,255,255,.4);margin-top:2px}
 
-.gold-rule{height:1px;background:linear-gradient(90deg,#c9a84c 0%,rgba(201,168,76,.1) 100%)}
+/* ── Gold rule ── */
+.gold-rule{height:1px;background:linear-gradient(90deg,#c9a84c 0%,rgba(201,168,76,.08) 100%)}
 
-.receipt-title{background:#f8f5f0;padding:14px 36px;border-bottom:1px solid #ede8e0}
-.receipt-title-text{font-family:'Cormorant Garamond',serif;font-size:20px;color:#0b1520;font-weight:400;letter-spacing:.2px}
-.receipt-title-sub{font-size:10px;color:#8a8a9a;letter-spacing:.12em;text-transform:uppercase;margin-top:2px}
+/* ── Title bar ── */
+.title-bar{background:#f8f5f0;padding:10px 32px;border-bottom:1px solid #ede8e0;display:flex;justify-content:space-between;align-items:center}
+.title-text{font-family:'Cormorant Garamond',serif;font-size:18px;color:#0b1520;font-weight:400}
+.print-btn{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:600;color:#a07830;background:rgba(201,168,76,.1);border:1px solid rgba(201,168,76,.3);border-radius:6px;padding:4px 10px;cursor:pointer;letter-spacing:.06em}
+.no-print .print-btn{display:inline-flex}
 
-.body{padding:20px 36px}
+/* ── Amount hero ── */
+.amount-hero{background:linear-gradient(135deg,#0b1520,#162038);margin:14px 32px;border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:flex-start}
+.amount-col{}
+.amount-lbl{font-size:8.5px;color:rgba(255,255,255,.45);text-transform:uppercase;letter-spacing:.18em;margin-bottom:3px}
+.amount-val{font-family:'Cormorant Garamond',serif;font-size:30px;font-weight:600;color:#c9a84c;line-height:1}
+.amount-words{font-size:9.5px;color:rgba(255,255,255,.4);margin-top:5px;font-style:italic;line-height:1.4}
+.mode-pill{display:flex;flex-direction:column;align-items:center;background:rgba(201,168,76,.14);border:1px solid rgba(201,168,76,.28);border-radius:8px;padding:8px 14px;flex-shrink:0}
+.mode-icon{font-size:18px;line-height:1;margin-bottom:3px}
+.mode-lbl{font-size:9px;color:#c9a84c;font-weight:700;text-transform:uppercase;letter-spacing:.1em}
 
-.amount-hero{background:linear-gradient(135deg,#0b1520,#162038);border-radius:10px;padding:20px 24px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:center}
-.amount-label{font-size:9px;color:rgba(255,255,255,.5);text-transform:uppercase;letter-spacing:.15em;margin-bottom:4px}
-.amount-value{font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:600;color:#c9a84c}
-.amount-words{font-size:10px;color:rgba(255,255,255,.4);margin-top:3px}
-.mode-badge{background:rgba(201,168,76,.15);border:1px solid rgba(201,168,76,.3);border-radius:8px;padding:8px 14px;text-align:center}
-.mode-icon{font-size:18px;margin-bottom:3px}
-.mode-label{font-size:10px;color:#c9a84c;font-weight:600;text-transform:uppercase;letter-spacing:.1em}
+/* ── Detail grid ── */
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 32px;margin-bottom:12px}
+.d-item{background:#f8f5f0;border-radius:7px;padding:8px 10px;border-left:2px solid #c9a84c}
+.d-lbl{font-size:8px;text-transform:uppercase;letter-spacing:.14em;color:#8a8a9a;margin-bottom:2px}
+.d-val{font-size:11px;color:#1a1a1a;font-weight:500;line-height:1.3}
 
-.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
-.detail-item{background:#f8f5f0;border-radius:7px;padding:10px 12px;border-left:2px solid #c9a84c}
-.detail-label{font-size:8.5px;text-transform:uppercase;letter-spacing:.14em;color:#8a8a9a;margin-bottom:3px}
-.detail-value{font-size:12px;color:#1a1a1a;font-weight:500}
+/* ── Purpose box ── */
+.purpose-box{margin:0 32px 12px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;display:flex;align-items:center;gap:10px}
+.purpose-icon{font-size:16px;flex-shrink:0}
+.purpose-label{font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#15803d;margin-bottom:1px;font-weight:600}
+.purpose-text{font-size:11px;color:#166534;font-weight:500}
 
-.purpose-box{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
-.purpose-icon{font-size:18px}
-.purpose-label{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#15803d;margin-bottom:2px}
-.purpose-text{font-size:12px;color:#166534;font-weight:500}
+/* ── Booking summary ── */
+.summary-box{margin:0 32px 12px;background:#fff;border:1px solid #ede8e0;border-radius:8px;overflow:hidden}
+.summary-header{background:linear-gradient(135deg,#0b1520,#162038);padding:6px 14px}
+.summary-header-text{font-size:8.5px;letter-spacing:.18em;text-transform:uppercase;color:#c9a84c;font-weight:600}
+.summary-rows{padding:10px 14px}
+.summary-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:11px}
+.summary-lbl{color:#4a4a5a}
+.summary-val{font-weight:500;color:#1a1a1a}
+.summary-sep{border-top:1px solid #ede8e0;margin:6px 0}
+.summary-balance{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;font-weight:700}
+.summary-balance-lbl{color:${balanceDue<=0?'#15803d':'#92400e'}}
+.summary-balance-val{color:${balanceDue<=0?'#15803d':'#d97706'}}
 
-.ref-box{background:#f8f5f0;border-radius:7px;padding:10px 14px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center}
-.ref-label{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:#8a8a9a}
-.ref-value{font-size:12px;color:#1a1a1a;font-weight:600;font-family:monospace;letter-spacing:.05em}
+/* ── Ref box ── */
+.ref-box{margin:0 32px 12px;background:#f8f5f0;border-radius:7px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center}
+.ref-lbl{font-size:8.5px;text-transform:uppercase;letter-spacing:.12em;color:#8a8a9a}
+.ref-val{font-size:11px;font-weight:600;font-family:monospace;color:#1a1a1a;letter-spacing:.04em}
 
-.footer{padding:14px 36px 18px;background:#f8f5f0;border-top:1px solid #ede8e0}
-.footer-contact{display:flex;gap:20px;flex-wrap:wrap;margin-bottom:8px}
-.footer-item{font-size:10px;color:#6a6a7a}
-.footer-item-label{font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#9a9aaa;margin-bottom:1px}
+/* ── Notes ── */
+.notes-box{margin:0 32px 12px;background:#fff8e8;border:1px solid rgba(201,168,76,.25);border-radius:7px;padding:8px 12px;font-size:10.5px;color:#4a4a5a;line-height:1.5}
 
-.closing{padding:12px 36px 16px;text-align:center}
-.closing-rule{height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,.3) 30%,rgba(201,168,76,.3) 70%,transparent);margin-bottom:10px}
-.closing-text{font-size:9px;color:#9a9aaa;line-height:1.65}
-.closing-ref{display:inline-block;margin-top:6px;font-size:8.5px;font-weight:600;color:rgba(201,168,76,.65);letter-spacing:.16em;text-transform:uppercase;border-top:1px solid rgba(201,168,76,.2);padding-top:4px}
+/* ── Footer ── */
+.footer{background:#f8f5f0;border-top:1px solid #ede8e0;padding:10px 32px;display:flex;gap:0;margin-top:2px}
+.f-cell{flex:1;padding-right:16px}
+.f-lbl{font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#9a9aaa;margin-bottom:1px}
+.f-val{font-size:10.5px;color:#1a1a1a;font-weight:500}
 
+/* ── Closing ── */
+.closing{padding:10px 32px 14px;text-align:center}
+.closing-rule{height:1px;background:linear-gradient(90deg,transparent,rgba(201,168,76,.3) 30%,rgba(201,168,76,.3) 70%,transparent);margin-bottom:9px}
+.closing-text{font-size:9px;color:#9a9aaa;line-height:1.6}
+.closing-ref{display:inline-block;margin-top:5px;font-size:8px;font-weight:600;color:rgba(201,168,76,.65);letter-spacing:.16em;text-transform:uppercase;border-top:1px solid rgba(201,168,76,.2);padding-top:4px}
+
+/* ── Print ── */
 @media print{
   @page{size:A5;margin:0}
   *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
   body{overflow:visible!important}
+  .no-print{display:none!important}
 }
 </style>
 </head>
 <body>
 <div class="page">
 
+<!-- Header -->
 <div class="header">
   <div>
     <div class="brand-name">BookMySpaces</div>
     <div class="brand-tag">Premium Hospitality · Kolkata</div>
   </div>
   <div class="receipt-badge">
-    <div class="receipt-label">Money Receipt</div>
-    <div class="receipt-number">${payment.receipt_number}</div>
+    <div class="receipt-type">Money Receipt</div>
+    <div class="receipt-num">${payment.receipt_number}</div>
     <div class="receipt-date">${fmtDate(payment.payment_date)}</div>
   </div>
 </div>
 <div class="gold-rule"></div>
 
-<div class="receipt-title">
-  <div class="receipt-title-text">Payment Acknowledgement</div>
-  <div class="receipt-title-sub">Official Money Receipt · BookMySpaces</div>
+<!-- Title bar -->
+<div class="title-bar">
+  <div class="title-text">Payment Acknowledgement</div>
+  <button class="print-btn no-print" onclick="window.print()">🖨 Print / Save PDF</button>
 </div>
 
-<div class="body">
-
-  <div class="amount-hero">
-    <div>
-      <div class="amount-label">Amount Received</div>
-      <div class="amount-value">${inr(Number(payment.amount))}</div>
-      <div class="amount-words">Indian Rupees · ${today}</div>
-    </div>
-    <div class="mode-badge">
-      <div class="mode-icon">${payment.payment_mode === 'upi' ? '📱' : payment.payment_mode === 'cash' ? '💵' : payment.payment_mode === 'card' ? '💳' : '🏦'}</div>
-      <div class="mode-label">${modeLabel(payment.payment_mode)}</div>
-    </div>
+<!-- Amount hero -->
+<div class="amount-hero">
+  <div class="amount-col">
+    <div class="amount-lbl">Amount Received</div>
+    <div class="amount-val">${inr(amt)}</div>
+    <div class="amount-words">${words}</div>
   </div>
-
-  <div class="detail-grid">
-    <div class="detail-item">
-      <div class="detail-label">Received From</div>
-      <div class="detail-value">${proposal.client_name}</div>
-    </div>
-    <div class="detail-item">
-      <div class="detail-label">Contact</div>
-      <div class="detail-value">${proposal.client_phone || '—'}</div>
-    </div>
-    <div class="detail-item">
-      <div class="detail-label">Proposal Reference</div>
-      <div class="detail-value">${proposal.proposal_number}</div>
-    </div>
-    <div class="detail-item">
-      <div class="detail-label">Event Type</div>
-      <div class="detail-value">${proposal.event_type || '—'}</div>
-    </div>
-    <div class="detail-item">
-      <div class="detail-label">Payment Date</div>
-      <div class="detail-value">${fmtDate(payment.payment_date)}</div>
-    </div>
-    <div class="detail-item">
-      <div class="detail-label">Payment Type</div>
-      <div class="detail-value" style="text-transform:capitalize">${(payment.payment_type || 'advance').replace('_', ' ')}</div>
-    </div>
+  <div class="mode-pill">
+    <div class="mode-icon">${modeIcon(payment.payment_mode)}</div>
+    <div class="mode-lbl">${modeLabel(payment.payment_mode)}</div>
   </div>
-
-  <div class="purpose-box">
-    <div class="purpose-icon">✓</div>
-    <div>
-      <div class="purpose-label">Purpose</div>
-      <div class="purpose-text">Advance payment against booking — ${proposal.proposal_number}</div>
-    </div>
-  </div>
-
-  ${payment.transaction_ref ? `
-  <div class="ref-box">
-    <span class="ref-label">Transaction Reference</span>
-    <span class="ref-value">${payment.transaction_ref}</span>
-  </div>` : ''}
-
-  ${payment.notes ? `
-  <div style="padding:10px 14px;background:#fff8e8;border-radius:7px;border:1px solid rgba(201,168,76,.25);font-size:11px;color:#4a4a5a;margin-bottom:0">
-    <span style="font-size:8.5px;text-transform:uppercase;letter-spacing:.12em;color:#c9a84c;font-weight:600">Notes · </span>${payment.notes}
-  </div>` : ''}
-
 </div>
 
+<!-- Detail grid -->
+<div class="detail-grid">
+  <div class="d-item">
+    <div class="d-lbl">Received From</div>
+    <div class="d-val">${proposal.client_name}</div>
+  </div>
+  <div class="d-item">
+    <div class="d-lbl">Contact</div>
+    <div class="d-val">${proposal.client_phone || '—'}</div>
+  </div>
+  <div class="d-item">
+    <div class="d-lbl">Proposal Reference</div>
+    <div class="d-val">${proposal.proposal_number}</div>
+  </div>
+  <div class="d-item">
+    <div class="d-lbl">Event</div>
+    <div class="d-val">${proposal.event_type || '—'}</div>
+  </div>
+  <div class="d-item">
+    <div class="d-lbl">Payment Date</div>
+    <div class="d-val">${fmtDate(payment.payment_date)}</div>
+  </div>
+  <div class="d-item">
+    <div class="d-lbl">Payment Type</div>
+    <div class="d-val" style="text-transform:capitalize">${payType}</div>
+  </div>
+</div>
+
+<!-- Purpose -->
+<div class="purpose-box">
+  <div class="purpose-icon">✓</div>
+  <div>
+    <div class="purpose-label">Purpose</div>
+    <div class="purpose-text">${payType.charAt(0).toUpperCase()+payType.slice(1)} payment received against Proposal ${proposal.proposal_number}</div>
+  </div>
+</div>
+
+<!-- Booking summary -->
+<div class="summary-box">
+  <div class="summary-header"><div class="summary-header-text">Booking Summary</div></div>
+  <div class="summary-rows">
+    <div class="summary-row">
+      <span class="summary-lbl">Booking Value</span>
+      <span class="summary-val">${inr(totalPrice)}</span>
+    </div>
+    <div class="summary-row">
+      <span class="summary-lbl">Amount Received (This Payment)</span>
+      <span class="summary-val" style="color:#15803d">${inr(amt)}</span>
+    </div>
+    ${advancePaid > amt ? `
+    <div class="summary-row">
+      <span class="summary-lbl">Total Received to Date</span>
+      <span class="summary-val" style="color:#15803d">${inr(advancePaid)}</span>
+    </div>` : ''}
+    <div class="summary-sep"></div>
+    <div class="summary-balance">
+      <span class="summary-balance-lbl">${balanceDue <= 0 ? '✓ Fully Settled' : 'Balance Due'}</span>
+      <span class="summary-balance-val">${inr(balanceDue)}</span>
+    </div>
+  </div>
+</div>
+
+<!-- Transaction ref -->
+${payment.transaction_ref ? `
+<div class="ref-box">
+  <span class="ref-lbl">Transaction Reference</span>
+  <span class="ref-val">${payment.transaction_ref}</span>
+</div>` : ''}
+
+<!-- Notes -->
+${payment.notes ? `
+<div class="notes-box">
+  <span style="font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#c9a84c;font-weight:600">Notes · </span>${payment.notes}
+</div>` : ''}
+
+<!-- Footer -->
 <div class="footer">
-  <div class="footer-contact">
-    <div class="footer-item">
-      <div class="footer-item-label">WhatsApp / Call</div>
-      9051459463
-    </div>
-    <div class="footer-item">
-      <div class="footer-item-label">UPI</div>
-      9836014495@upi
-    </div>
-    <div class="footer-item">
-      <div class="footer-item-label">Address</div>
-      Mukundapur, Near EM Bypass, Kolkata
-    </div>
+  <div class="f-cell">
+    <div class="f-lbl">WhatsApp / Call</div>
+    <div class="f-val">9051459463</div>
+  </div>
+  <div class="f-cell">
+    <div class="f-lbl">UPI Payment</div>
+    <div class="f-val">9836014495@upi</div>
+  </div>
+  <div class="f-cell">
+    <div class="f-lbl">Address</div>
+    <div class="f-val">Mukundapur, EM Bypass, Kolkata</div>
   </div>
 </div>
 
+<!-- Closing -->
 <div class="closing">
   <div class="closing-rule"></div>
   <div class="closing-text">
     <strong style="color:#6a6a7a">Digitally Generated Receipt</strong><br>
-    This document has been generated through the BookMySpaces system and is valid without a physical signature.
+    This receipt has been generated through the BookMySpaces system and is valid without a physical signature.<br>
+    <em style="color:#b0a080">Thank you for choosing BookMySpaces. We look forward to hosting your celebration.</em>
   </div>
-  <div class="closing-ref">Receipt: ${payment.receipt_number}</div>
+  <div class="closing-ref">Receipt No: ${payment.receipt_number}</div>
 </div>
 
 </div>
+
+<!-- Auto-print on screen load -->
+<script>
+  window.addEventListener('load', function() {
+    setTimeout(function() {
+      var btn = document.querySelector('.print-btn');
+      if (btn) btn.style.display = 'inline-flex';
+      // Only auto-print if ?print=1 in URL
+      if (window.location.search.includes('print=1')) {
+        window.print();
+      }
+    }, 500);
+  });
+</script>
 </body>
 </html>`
 }
 
-// ─── GET — generate receipt PDF for latest/specific payment ──────────────────
+// ─── GET — unchanged route URL and DB logic ───────────────────────────────────
 
 export async function GET(
   req: NextRequest,
@@ -221,7 +334,6 @@ export async function GET(
     const { searchParams } = new URL(req.url)
     const paymentId = searchParams.get('payment_id')
 
-    // Fetch proposal
     const { data: proposal, error: propErr } = await supabase
       .from('proposals')
       .select('*')
@@ -232,24 +344,20 @@ export async function GET(
       return new NextResponse('Proposal not found', { status: 404 })
     }
 
-    // Fetch specific payment or latest
-    const query = supabase
-      .from('payments')
-      .select('*')
-      .eq('proposal_id', params.id)
-      .order('created_at', { ascending: false })
-
     const { data: payments, error: payErr } = paymentId
-      ? await supabase.from('payments').select('*').eq('id', paymentId).single().then(r => ({ data: r.data ? [r.data] : null, error: r.error }))
-      : await query.limit(1)
+      ? await supabase.from('payments').select('*').eq('id', paymentId).single()
+          .then(r => ({ data: r.data ? [r.data] : null, error: r.error }))
+      : await supabase.from('payments').select('*')
+          .eq('proposal_id', params.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
 
     if (payErr || !payments || payments.length === 0) {
       return new NextResponse('No payment found for this proposal', { status: 404 })
     }
 
-    const payment = payments[0]
-    const html    = buildReceiptHTML(proposal, payment)
-
+    const payment  = payments[0]
+    const html     = buildReceiptHTML(proposal, payment)
     const filename = `BookMySpaces-Receipt-${payment.receipt_number}.pdf`
 
     return new NextResponse(html, {
