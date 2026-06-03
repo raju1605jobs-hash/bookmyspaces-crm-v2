@@ -13,24 +13,20 @@ import { logger } from './logger'
 //   (uses WHATSAPP_WEBHOOK_VERIFY_TOKEN)
 // ═══════════════════════════════════════════════════════════════
 
-// ⚠️  DO NOT read env vars at module load time (top-level const).
-//    Vercel serverless functions may bundle this module before env
-//    vars are injected. Always read process.env inside functions.
-const META_API_VERSION = 'v23.0'
+const WHATSAPP_ACCESS_TOKEN    = process.env.WHATSAPP_ACCESS_TOKEN    || ''
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || ''
+const META_API_VERSION         = 'v23.0'
+
+// ─── STARTUP DIAGNOSTIC (remove after confirming env is correct) ──
+if (typeof window === 'undefined') {
+  console.log('[WhatsApp] TOKEN EXISTS   :', !!WHATSAPP_ACCESS_TOKEN)
+  console.log('[WhatsApp] PHONE_NUMBER_ID:', WHATSAPP_PHONE_NUMBER_ID || '(not set)')
+  console.log('[WhatsApp] META CONFIGURED:', !!(WHATSAPP_ACCESS_TOKEN && WHATSAPP_PHONE_NUMBER_ID))
+}
 
 // ─── CONFIGURATION CHECK ──────────────────────────────────────
 export function isMetaConfigured(): boolean {
-  const token    = process.env.WHATSAPP_ACCESS_TOKEN    ?? ''
-  const numberId = process.env.WHATSAPP_PHONE_NUMBER_ID ?? ''
-  const ok       = !!(token && numberId)
-  if (!ok) {
-    console.warn(
-      '[WhatsApp] isMetaConfigured=false.',
-      'WHATSAPP_ACCESS_TOKEN present:', !!token,
-      '| WHATSAPP_PHONE_NUMBER_ID present:', !!numberId,
-    )
-  }
-  return ok
+  return !!(WHATSAPP_ACCESS_TOKEN && WHATSAPP_PHONE_NUMBER_ID)
 }
 
 // ─── PHONE NORMALISATION ──────────────────────────────────────
@@ -38,94 +34,57 @@ export function isMetaConfigured(): boolean {
 // e.g. "9051459463" → "919051459463"
 function normalizePhone(phone: string): string {
   const digits = phone.replace(/\D/g, '')
-  const normalized = digits.startsWith('91') ? digits : `91${digits}`
-  console.log(`[WhatsApp] normalizePhone: "${phone}" → "${normalized}"`)
-  return normalized
+  return digits.startsWith('91') ? digits : `91${digits}`
 }
 
 // ─── INTERNAL META API REQUEST HELPER ────────────────────────
 async function metaRequest(body: Record<string, unknown>): Promise<unknown> {
-  const accessToken    = process.env.WHATSAPP_ACCESS_TOKEN    ?? ''
-  const phoneNumberId  = process.env.WHATSAPP_PHONE_NUMBER_ID ?? ''
-
-  if (!accessToken || !phoneNumberId) {
+  if (!isMetaConfigured()) {
     throw new Error(
-      'Meta WhatsApp not configured. ' +
-      `WHATSAPP_ACCESS_TOKEN: ${accessToken ? 'set' : 'MISSING'}, ` +
-      `WHATSAPP_PHONE_NUMBER_ID: ${phoneNumberId ? 'set' : 'MISSING'}`
+      'Meta WhatsApp not configured. Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID.'
     )
   }
-
-  const url = `https://graph.facebook.com/${META_API_VERSION}/${phoneNumberId}/messages`
-
-  console.log('[WhatsApp] metaRequest →', url)
-  console.log('[WhatsApp] payload:', JSON.stringify(body))
-
+  const url = `https://graph.facebook.com/${META_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`
   const res = await fetch(url, {
-    method:  'POST',
+    method: 'POST',
     headers: {
       'Content-Type':  'application/json',
-      'Authorization': `Bearer ${accessToken}`,
+      'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
     },
     body: JSON.stringify(body),
   })
-
-  const responseText = await res.text()
-  console.log(`[WhatsApp] Meta API response: status=${res.status} body=${responseText}`)
-
   if (!res.ok) {
-    throw new Error(`Meta API ${res.status}: ${responseText}`)
+    const err = await res.text()
+    throw new Error(`Meta API ${res.status}: ${err}`)
   }
-
-  try {
-    return JSON.parse(responseText)
-  } catch {
-    return responseText
-  }
+  return res.json()
 }
 
 // ─── SEND TEXT MESSAGE (session / 24h window) ─────────────────
-// Use for all free-form messages within 24 hours of customer contact.
-// Maps to WHATSAPP_MESSAGES templates in lib/templates.ts.
 export async function sendWhatsAppMessage(
-  phone:   string,
+  phone: string,
   message: string
 ): Promise<boolean> {
-  console.log('[WhatsApp] sendWhatsAppMessage called, phone:', phone.slice(0, 4) + '***')
-
   if (!isMetaConfigured()) {
-    logger.info(
-      'whatsapp',
-      '[WhatsApp MOCK] Would send text message (Meta not configured)',
-      { phone: phone.slice(0, 3) + '***', preview: message.slice(0, 60) }
-    )
+    logger.info('whatsapp','[WhatsApp MOCK] Would send text message (Meta not configured)',
+      { phone: phone.slice(0,3)+'***', preview: message.slice(0,60) })
     return false
   }
-
   try {
-    const result = await metaRequest({
+    await metaRequest({
       messaging_product: 'whatsapp',
       to:                normalizePhone(phone),
       type:              'text',
       text:              { body: message },
     })
-    console.log('[WhatsApp] sendWhatsAppMessage success:', JSON.stringify(result))
     return true
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    console.error('[WhatsApp] sendWhatsAppMessage FAILED:', msg)
-    logger.error('whatsapp', 'sendWhatsAppMessage error', err)
+    logger.error('whatsapp','sendWhatsAppMessage error', err)
     return false
   }
 }
 
 // ─── SEND APPROVED TEMPLATE MESSAGE (outside 24h window) ──────
-// Use for APPROVED_TEMPLATES from lib/templates.ts.
-// Templates must be submitted and approved in Meta Business Manager
-// before use: business.facebook.com → WhatsApp Manager → Message Templates
-//
-// TemplateParam { name, value } is mapped to Meta's positional format.
-// Parameter order must match the template variable order ({{1}}, {{2}}, etc.).
 export interface TemplateParam {
   name:  string
   value: string
@@ -135,22 +94,15 @@ export async function sendTemplateMessage(
   phone:           string,
   templateName:    string,
   params:          TemplateParam[] = [],
-  _broadcastName?: string           // kept for call-site compatibility, unused by Meta
+  _broadcastName?: string
 ): Promise<boolean> {
-  console.log('[WhatsApp] sendTemplateMessage called, template:', templateName, 'phone:', phone.slice(0, 4) + '***')
-
   if (!isMetaConfigured()) {
-    logger.info(
-      'whatsapp',
-      '[WhatsApp MOCK] Template not sent (Meta not configured)',
-      { template: templateName }
-    )
+    logger.info('whatsapp','[WhatsApp MOCK] Template not sent (Meta not configured)',
+      { template: templateName })
     return false
   }
-
   try {
     const metaParams = params.map(p => ({ type: 'text', text: p.value }))
-
     const templatePayload: Record<string, unknown> = {
       messaging_product: 'whatsapp',
       to:                normalizePhone(phone),
@@ -163,21 +115,15 @@ export async function sendTemplateMessage(
           : [],
       },
     }
-
-    const result = await metaRequest(templatePayload)
-    console.log('[WhatsApp] sendTemplateMessage success:', JSON.stringify(result))
+    await metaRequest(templatePayload)
     return true
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    console.error('[WhatsApp] sendTemplateMessage FAILED:', msg)
-    logger.error('whatsapp', 'sendTemplateMessage error', err)
+    logger.error('whatsapp','sendTemplateMessage error', err)
     return false
   }
 }
 
 // ─── BROADCAST CAMPAIGN ───────────────────────────────────────
-// Loops over recipients sending the same approved template.
-// 120ms delay between sends to respect Meta rate limits.
 export interface BroadcastRecipient {
   whatsappNumber: string
   customParams?:  TemplateParam[]
@@ -189,29 +135,20 @@ export async function sendBroadcastCampaign(
   broadcastName: string
 ): Promise<{ success: number; failed: number }> {
   if (!isMetaConfigured()) {
-    logger.info(
-      'whatsapp',
-      '[WhatsApp MOCK] Broadcast not sent (Meta not configured)',
-      { count: recipients.length }
-    )
+    logger.info('whatsapp','[WhatsApp MOCK] Broadcast not sent (Meta not configured)',
+      { count: recipients.length })
     return { success: 0, failed: recipients.length }
   }
-
   let success = 0
   let failed  = 0
-
   for (const r of recipients) {
     const ok = await sendTemplateMessage(
-      r.whatsappNumber,
-      templateName,
-      r.customParams,
-      broadcastName
+      r.whatsappNumber, templateName, r.customParams, broadcastName
     )
     if (ok) success++
     else    failed++
     await new Promise(res => setTimeout(res, 120))
   }
-
   return { success, failed }
 }
 
