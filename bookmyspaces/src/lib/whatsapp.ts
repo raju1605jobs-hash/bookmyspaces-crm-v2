@@ -101,7 +101,7 @@ async function metaRequest(body: Record<string, unknown>): Promise<unknown> {
   console.error(responseText)
 
   if (!res.ok) {
-    throw new Error(`Meta API ${res.status}: ${responseText}`)
+    throw new Error(`[META ERROR] status=${res.status} body=${responseText}`)
   }
 
   try {
