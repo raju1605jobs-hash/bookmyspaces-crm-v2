@@ -1,247 +1,251 @@
 // src/app/api/whatsapp/webhook/route.ts
-//
-// DEBUGGING VERSION — logs every byte of the verification handshake.
-// Safe to deploy to Vercel. Remove the verbose logs after verification passes.
+// Meta Cloud API webhook — verification + inbound message handling
 
-import { NextRequest, NextResponse } from "next/server";
-import { sendWhatsAppMessage } from "@/lib/whatsapp";
+import { NextRequest, NextResponse } from 'next/server'
+import { sendWhatsAppMessage }       from '@/lib/whatsapp'
+import { getSupabaseAdmin }          from '@/lib/supabase'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// GET  — Meta webhook verification
-//
-// Meta sends exactly:
-//   GET /api/whatsapp/webhook
-//     ?hub.mode=subscribe
-//     &hub.verify_token=<your token>
-//     &hub.challenge=<random string>
-//
-// You MUST respond with:
-//   Status  : 200
-//   Body    : <hub.challenge> as plain text — the EXACT string, nothing else
-// ─────────────────────────────────────────────────────────────────────────────
+export const dynamic    = 'force-dynamic'
+export const runtime    = 'nodejs'
+export const maxDuration = 30
+
+// ─── GET — Meta webhook verification ─────────────────────────
 export async function GET(request: NextRequest) {
-  // ── Log every incoming detail so you can see what Meta actually sends ──────
-  console.log("[WA Webhook GET] ===== VERIFICATION REQUEST =====");
-  console.log("[WA Webhook GET] Full URL:", request.url);
-  console.log("[WA Webhook GET] Method:", request.method);
-  console.log("[WA Webhook GET] Headers:", Object.fromEntries(request.headers.entries()));
+  const { searchParams } = new URL(request.url)
 
-  const { searchParams } = new URL(request.url);
+  const mode      = searchParams.get('hub.mode')
+  const token     = searchParams.get('hub.verify_token')
+  const challenge = searchParams.get('hub.challenge')
 
-  // Log ALL query params so you can catch unexpected encoding
-  console.log("[WA Webhook GET] All query params:");
-  searchParams.forEach((value, key) => {
-    console.log(`  [${key}] = [${value}]  (length: ${value.length})`);
-  });
-
-  // Note: the param names literally contain dots — "hub.mode" not "hub_mode"
-  const mode      = searchParams.get("hub.mode");
-  const token     = searchParams.get("hub.verify_token");
-  const challenge = searchParams.get("hub.challenge");
-
-  console.log("[WA Webhook GET] Parsed values:", {
-    mode,
-    challenge,
-    tokenFromMeta: token,
-    tokenLength: token?.length ?? 0,
-  });
-
-  // ── Load verify token from env ─────────────────────────────────────────────
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN;
-console.log("[WA Webhook GET] ENV TOKEN DIRECT =", JSON.stringify(verifyToken));
+  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN
 
   if (!verifyToken) {
     console.error(
-      "[WA Webhook GET] ❌ WHATSAPP_WEBHOOK_VERIFY_TOKEN is not set.",
-      "Go to Vercel → Project → Settings → Environment Variables.",
-      "Make sure it is set for the correct environment (Production/Preview/Development).",
-      "After adding, REDEPLOY — Vercel does not hot-reload env changes."
-    );
-    return new NextResponse("Server configuration error", { status: 500 });
+      '[WA Webhook] WHATSAPP_WEBHOOK_VERIFY_TOKEN is not set.',
+      'Add it in Vercel → Project → Settings → Environment Variables, then redeploy.'
+    )
+    return new NextResponse('Server configuration error', { status: 500 })
   }
 
-  // ── Defensive: strip whitespace/newlines that sneak in via .env or Vercel UI
-  const cleanVerifyToken = verifyToken.trim();
-  const cleanTokenFromMeta = (token ?? "").trim();
+  const cleanVerifyToken   = verifyToken.trim()
+  const cleanTokenFromMeta = (token ?? '').trim()
 
-  console.log("[WA Webhook GET] Token comparison:", {
-    envTokenRaw:       JSON.stringify(verifyToken),         // shows hidden whitespace
-    envTokenCleaned:   JSON.stringify(cleanVerifyToken),
-    metaTokenRaw:      JSON.stringify(token),
-    metaTokenCleaned:  JSON.stringify(cleanTokenFromMeta),
-    lengthEnv:         cleanVerifyToken.length,
-    lengthMeta:        cleanTokenFromMeta.length,
-    match:             cleanVerifyToken === cleanTokenFromMeta,
-  });
-
-  // ── Verify ─────────────────────────────────────────────────────────────────
-  if (mode === "subscribe" && cleanVerifyToken === cleanTokenFromMeta) {
+  if (mode === 'subscribe' && cleanVerifyToken === cleanTokenFromMeta) {
     if (!challenge) {
-      console.error("[WA Webhook GET] ❌ hub.challenge is missing from Meta request");
-      return new NextResponse("Bad Request: missing challenge", { status: 400 });
+      return new NextResponse('Bad Request: missing challenge', { status: 400 })
     }
-
-    console.log("[WA Webhook GET] ✅ Verification PASSED. Returning challenge:", challenge);
-
-    // Return the challenge as plain text with explicit Content-Type.
-    // IMPORTANT: return the string EXACTLY — no JSON wrapping, no quotes, no newline.
     return new NextResponse(challenge, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/plain",
-      },
-    });
+      status:  200,
+      headers: { 'Content-Type': 'text/plain' },
+    })
   }
 
-  // ── Failure diagnostics ────────────────────────────────────────────────────
-  console.warn("[WA Webhook GET] ❌ Verification FAILED.");
-  console.warn("[WA Webhook GET] Reason checklist:");
-  console.warn("  mode === 'subscribe'?", mode === "subscribe", `(got: ${JSON.stringify(mode)})`);
-  console.warn("  token matches?", cleanVerifyToken === cleanTokenFromMeta);
-  console.warn(
-    "  If tokens look identical but still fail, check for non-printable characters.",
-    "Run: console.log([...verifyToken].map(c => c.charCodeAt(0)))"
-  );
-
-  return new NextResponse("Forbidden", { status: 403 });
+  return new NextResponse('Forbidden', { status: 403 })
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// POST — Incoming messages & status updates from Meta
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── POST — Incoming messages & status updates ────────────────
+// Always return 200 — a non-200 causes Meta to retry for 72 hours.
 export async function POST(request: NextRequest) {
-  console.log("[WA Webhook POST] ===== INCOMING PAYLOAD =====");
+  let body: WhatsAppWebhookPayload
 
-  let body: WhatsAppWebhookPayload;
   try {
-    body = await request.json();
-    console.log("[WA Webhook POST] Raw payload:", JSON.stringify(body, null, 2));
-  } catch (err) {
-    console.error("[WA Webhook POST] ❌ Failed to parse JSON body:", err);
-    return new NextResponse("Bad Request", { status: 400 });
+    body = await request.json()
+  } catch {
+    return new NextResponse('Bad Request', { status: 400 })
   }
 
-  if (body.object !== "whatsapp_business_account") {
-    console.warn("[WA Webhook POST] Unexpected object type:", body.object);
-    return new NextResponse("OK", { status: 200 });
+  if (body.object !== 'whatsapp_business_account') {
+    return new NextResponse('OK', { status: 200 })
   }
 
   try {
     for (const entry of body.entry ?? []) {
       for (const change of entry.changes ?? []) {
-        if (change.field !== "messages") continue;
+        if (change.field !== 'messages') continue
 
-        const value = change.value;
+        const value = change.value
 
-        // Status updates
+        // Delivery / read status updates — log only
         for (const status of value.statuses ?? []) {
-          console.log("[WA Webhook POST] Status update:", {
-            messageId: status.id,
-            status: status.status,
+          console.log('[WA] Status update:', {
+            id:        status.id,
+            status:    status.status,
             recipient: status.recipient_id,
-            timestamp: new Date(Number(status.timestamp) * 1000).toISOString(),
-            errors: status.errors ?? null,
-          });
+            errors:    status.errors ?? null,
+          })
         }
 
-        // Incoming messages
+        // Inbound messages
         for (const message of value.messages ?? []) {
-          const contact = value.contacts?.find((c) => c.wa_id === message.from);
-          const senderName = contact?.profile?.name ?? "Unknown";
-
-          console.log("[WA Webhook POST] Incoming message:", {
-            from: message.from,
-            senderName,
-            messageId: message.id,
-            type: message.type,
-            timestamp: new Date(Number(message.timestamp) * 1000).toISOString(),
-            text: message.type === "text" ? message.text?.body : undefined,
-          });
-
-          await handleIncomingMessage(message, senderName);
+          const contact    = value.contacts?.find(c => c.wa_id === message.from)
+          const senderName = contact?.profile?.name ?? 'Unknown'
+          await handleIncomingMessage(message, senderName)
         }
       }
     }
   } catch (err) {
-    // Always 200 to Meta — if you return 5xx, Meta will retry for 72 hours
-    console.error("[WA Webhook POST] ❌ Error processing payload:", err);
+    console.error('[WA Webhook] Error processing payload:', err)
   }
 
-  return new NextResponse("OK", { status: 200 });
+  return new NextResponse('OK', { status: 200 })
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Message dispatcher
-// ─────────────────────────────────────────────────────────────────────────────
-async function handleIncomingMessage(message: WhatsAppMessage, senderName: string) {
-  const from = message.from;
+// ─── Message dispatcher ───────────────────────────────────────
+async function handleIncomingMessage(
+  message:    WhatsAppMessage,
+  senderName: string
+) {
+  const from = message.from
 
   try {
-    if (message.type === "text") {
-      const text = message.text?.body ?? "";
-      console.log(`[WA Webhook] Text from ${senderName} (${from}): "${text}"`);
-      const reply = buildAutoReply(text, senderName);
-      console.log(`[WA Webhook] Sending reply to ${from}: "${reply}"`);
-      await sendWhatsAppMessage(from, reply);
-      console.log(`[WA Webhook] ✅ Reply sent to ${from}`);
-    } else {
-      console.log(`[WA Webhook] Unhandled message type: ${message.type} from ${from}`);
+    if (message.type === 'text') {
+      const text  = message.text?.body ?? ''
+      const reply = buildAutoReply(text, senderName)
+
+      // Send reply first — never block on DB
+      await sendWhatsAppMessage(from, reply)
+
+      // Persist inbound + outbound to conversations table
+      await persistConversation(from, senderName, text, reply)
     }
   } catch (err) {
-    console.error(`[WA Webhook] ❌ Error handling message from ${from}:`, err);
+    console.error(`[WA Webhook] Error handling message from ${from}:`, err)
   }
 }
 
+// ─── Persist inbound message + auto-reply to DB ───────────────
+// Uses phone as session_id for WhatsApp conversations.
+// Upserts conversation row, appends both turns to messages JSONB array.
+// Updates lead timestamps if a matching lead exists.
+async function persistConversation(
+  phone:      string,
+  senderName: string,
+  inbound:    string,
+  outbound:   string
+): Promise<void> {
+  const db        = getSupabaseAdmin()
+  const sessionId = `wa_${phone}`
+  const now       = new Date().toISOString()
+
+  // 1. Look up lead by phone
+  const { data: lead } = await db
+    .from('leads')
+    .select('id')
+    .eq('phone', phone)
+    .maybeSingle()
+
+  const leadId = lead?.id ?? null
+
+  // 2. Fetch existing conversation (to append, not overwrite)
+  const { data: existing } = await db
+    .from('conversations')
+    .select('id, messages')
+    .eq('session_id', sessionId)
+    .maybeSingle()
+
+  const prevMessages: ConversationMessage[] =
+    Array.isArray(existing?.messages) ? existing.messages : []
+
+  const newMessages: ConversationMessage[] = [
+    ...prevMessages,
+    { role: 'user',      content: inbound,  timestamp: now },
+    { role: 'assistant', content: outbound, timestamp: now },
+  ]
+
+  if (existing?.id) {
+    // Update existing conversation
+    await db
+      .from('conversations')
+      .update({
+        messages:   newMessages,
+        updated_at: now,
+        ...(leadId && { lead_id: leadId }),
+      })
+      .eq('id', existing.id)
+  } else {
+    // Insert new conversation
+    await db
+      .from('conversations')
+      .insert({
+        session_id:      sessionId,
+        channel:         'whatsapp',
+        lead_id:         leadId,
+        messages:        newMessages,
+        extracted_name:  senderName !== 'Unknown' ? senderName : null,
+        extracted_phone: phone,
+        is_active:       true,
+      })
+  }
+
+  // 3. Update lead timestamps if lead exists
+  if (leadId) {
+    await db
+      .from('leads')
+      .update({
+        last_contacted_at:       now,
+        whatsapp_last_message_at: now,
+        updated_at:               now,
+      })
+      .eq('id', leadId)
+  }
+}
+
+// ─── Auto-reply builder ───────────────────────────────────────
 function buildAutoReply(text: string, name: string): string {
-  const lower = text.toLowerCase();
-  if (lower.includes("book") || lower.includes("availability")) {
-    return `Hi ${name}! 👋 Please share your check-in/out dates, number of guests, and property preference (Skyline Serenity or MonuRama) and we'll confirm availability right away!`;
+  const lower = text.toLowerCase()
+
+  if (lower.includes('book') || lower.includes('availability')) {
+    return `Hi ${name}! 🏡 Please share your check-in/out dates, number of guests, and property preference (Skyline Serenity or MonuRama) and we'll confirm availability right away!`
   }
-  if (lower.includes("price") || lower.includes("rate")) {
-    return `Hi ${name}! Rooms start from ₹1,500/night including breakfast. Share your dates for a precise quote!`;
+  if (lower.includes('price') || lower.includes('rate')) {
+    return `Hi ${name}! Rooms start from ₹1,500/night including breakfast. Share your dates for a precise quote!`
   }
-  if (lower.includes("cancel")) {
-    return `Hi ${name}! For cancellations see https://www.bookmyspaces.in/cancellation.html or call +91 90514 59463.`;
+  if (lower.includes('cancel')) {
+    return `Hi ${name}! For cancellations see https://www.bookmyspaces.in/cancellation.html or call +91 90514 59463.`
   }
-  return `Hi ${name}! 👋 Thanks for reaching out to Book My Space. Our team will respond shortly. Call us at +91 90514 59463 or visit www.bookmyspaces.in`;
+  return `Hi ${name}! 🏡 Thanks for reaching out to Book My Space. Our team will respond shortly. Call us at +91 90514 59463 or visit www.bookmyspaces.in`
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────
+interface ConversationMessage {
+  role:      'user' | 'assistant'
+  content:   string
+  timestamp: string
+}
+
 interface WhatsAppMessage {
-  from: string;
-  id: string;
-  timestamp: string;
-  type: string;
-  text?: { body: string };
+  from:      string
+  id:        string
+  timestamp: string
+  type:      string
+  text?:     { body: string }
 }
 
 interface WhatsAppContact {
-  profile: { name: string };
-  wa_id: string;
+  profile: { name: string }
+  wa_id:   string
 }
 
 interface WhatsAppStatusUpdate {
-  id: string;
-  status: "sent" | "delivered" | "read" | "failed";
-  timestamp: string;
-  recipient_id: string;
-  errors?: Array<{ code: number; title: string }>;
+  id:           string
+  status:       'sent' | 'delivered' | 'read' | 'failed'
+  timestamp:    string
+  recipient_id: string
+  errors?:      Array<{ code: number; title: string }>
 }
 
 interface WhatsAppValue {
-  messaging_product: "whatsapp";
-  metadata: { display_phone_number: string; phone_number_id: string };
-  contacts?: WhatsAppContact[];
-  messages?: WhatsAppMessage[];
-  statuses?: WhatsAppStatusUpdate[];
+  messaging_product: 'whatsapp'
+  metadata:          { display_phone_number: string; phone_number_id: string }
+  contacts?:         WhatsAppContact[]
+  messages?:         WhatsAppMessage[]
+  statuses?:         WhatsAppStatusUpdate[]
 }
 
 interface WhatsAppWebhookPayload {
-  object: string;
-  entry: Array<{
-    id: string;
-    changes: Array<{ value: WhatsAppValue; field: string }>;
-  }>;
+  object: string
+  entry:  Array<{
+    id:      string
+    changes: Array<{ value: WhatsAppValue; field: string }>
+  }>
 }

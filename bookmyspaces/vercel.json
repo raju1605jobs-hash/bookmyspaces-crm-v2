@@ -1,0 +1,36 @@
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "devCommand": "npm run dev",
+  "installCommand": "npm install",
+  "regions": ["bom1"],
+  "functions": {
+    "src/app/api/chat/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/ai-summary/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/proposals/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/knowledge/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/analytics/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/followups/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/cron/followups/route.ts": {
+      "maxDuration": 30
+    }
+  },
+  "crons": [
+    {
+      "path":     "/api/cron/followups",
+      "schedule": "0 * * * *"
+    }
+  ]
+}

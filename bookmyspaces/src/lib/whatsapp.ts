@@ -1,214 +1,169 @@
 import { logger } from './logger'
-// ═══════════════════════════════════════════════════════════
-// WHATSAPP INTEGRATION LAYER
-// Status: PREPARED — not yet connected to live Wati account
-// Business number for future activation: 8274844343
+
+// ═══════════════════════════════════════════════════════════════
+// WHATSAPP INTEGRATION LAYER — Meta Cloud API
+// Provider: Meta WhatsApp Business Cloud API (direct, no reseller)
 //
-// Architecture is ready. When Wati account is approved:
-// 1. Set WATI_BASE_URL and WATI_API_TOKEN in .env.local
-// 2. Set WATI_VERIFY_TOKEN for webhook verification
-// 3. Configure webhook URL in Wati dashboard
-// 4. Everything below activates automatically
-// ═══════════════════════════════════════════════════════════
+// Required environment variables:
+//   WHATSAPP_ACCESS_TOKEN      — Bearer token from Meta Business Suite
+//   WHATSAPP_PHONE_NUMBER_ID   — Phone Number ID from Meta Developer Console
+//
+// Webhook verification is handled separately in:
+//   src/app/api/whatsapp/webhook/route.ts
+//   (uses WHATSAPP_WEBHOOK_VERIFY_TOKEN)
+// ═══════════════════════════════════════════════════════════════
 
-const WATI_BASE_URL = process.env.WATI_BASE_URL || ''
-const WATI_API_TOKEN = process.env.WATI_API_TOKEN || ''
+const WHATSAPP_ACCESS_TOKEN    = process.env.WHATSAPP_ACCESS_TOKEN    || ''
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || ''
+const META_API_VERSION         = 'v23.0'
 
-// Check if Wati is configured — used to guard all send operations
-export function isWatiConfigured(): boolean {
-  return !!(WATI_BASE_URL && WATI_API_TOKEN)
+// ─── STARTUP DIAGNOSTIC (remove after confirming env is correct) ──
+if (typeof window === 'undefined') {
+  console.log('[WhatsApp] TOKEN EXISTS   :', !!WHATSAPP_ACCESS_TOKEN)
+  console.log('[WhatsApp] PHONE_NUMBER_ID:', WHATSAPP_PHONE_NUMBER_ID || '(not set)')
+  console.log('[WhatsApp] META CONFIGURED:', !!(WHATSAPP_ACCESS_TOKEN && WHATSAPP_PHONE_NUMBER_ID))
 }
 
-// ─── INTERNAL REQUEST HELPER ─────────────────────────────
-async function watiRequest(path: string, method = 'GET', body?: unknown) {
-  if (!isWatiConfigured()) {
-    throw new Error('WhatsApp not yet configured. Set WATI_BASE_URL and WATI_API_TOKEN.')
+// ─── CONFIGURATION CHECK ──────────────────────────────────────
+export function isMetaConfigured(): boolean {
+  return !!(WHATSAPP_ACCESS_TOKEN && WHATSAPP_PHONE_NUMBER_ID)
+}
+
+// ─── PHONE NORMALISATION ──────────────────────────────────────
+// Ensures phone is in E.164 format without the leading +
+// e.g. "9051459463" → "919051459463"
+function normalizePhone(phone: string): string {
+  const digits = phone.replace(/\D/g, '')
+  return digits.startsWith('91') ? digits : `91${digits}`
+}
+
+// ─── INTERNAL META API REQUEST HELPER ────────────────────────
+async function metaRequest(body: Record<string, unknown>): Promise<unknown> {
+  if (!isMetaConfigured()) {
+    throw new Error(
+      'Meta WhatsApp not configured. Set WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID.'
+    )
   }
-
-  const res = await fetch(`${WATI_BASE_URL}/api/v1${path}`, {
-    method,
+  const url = `https://graph.facebook.com/${META_API_VERSION}/${WHATSAPP_PHONE_NUMBER_ID}/messages`
+  const res = await fetch(url, {
+    method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${WATI_API_TOKEN}`,
+      'Content-Type':  'application/json',
+      'Authorization': `Bearer ${WHATSAPP_ACCESS_TOKEN}`,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: JSON.stringify(body),
   })
-
   if (!res.ok) {
     const err = await res.text()
-    throw new Error(`Wati API ${res.status}: ${err}`)
+    throw new Error(`Meta API ${res.status}: ${err}`)
   }
-
   return res.json()
 }
 
-// ─── NORMALIZE PHONE ─────────────────────────────────────
-function toWatiPhone(phone: string): string {
-  const c = phone.replace(/\D/g, '')
-  return c.startsWith('91') ? c : `91${c}`
-}
-
-// ─── SEND SESSION MESSAGE (within 24h window) ────────────
-export async function sendWhatsAppMessage(phone: string, message: string): Promise<boolean> {
-  if (!isWatiConfigured()) {
-    logger.info('whatsapp', '[WhatsApp MOCK] Would send to phone (not configured)', { phone: phone.slice(0,3)+'***', preview: message.slice(0, 60) })
-    return false // gracefully return false — never throw
+// ─── SEND TEXT MESSAGE (session / 24h window) ─────────────────
+export async function sendWhatsAppMessage(
+  phone: string,
+  message: string
+): Promise<boolean> {
+  if (!isMetaConfigured()) {
+    logger.info('whatsapp','[WhatsApp MOCK] Would send text message (Meta not configured)',
+      { phone: phone.slice(0,3)+'***', preview: message.slice(0,60) })
+    return false
   }
-
   try {
-    await watiRequest('/sendSessionMessage/' + toWatiPhone(phone), 'POST', {
-      messageText: message,
+    await metaRequest({
+      messaging_product: 'whatsapp',
+      to:                normalizePhone(phone),
+      type:              'text',
+      text:              { body: message },
     })
     return true
   } catch (err) {
-    logger.error('whatsapp', 'sendWhatsAppMessage error', err)
+    logger.error('whatsapp','sendWhatsAppMessage error', err)
     return false
   }
 }
 
-// ─── SEND APPROVED TEMPLATE ──────────────────────────────
+// ─── SEND APPROVED TEMPLATE MESSAGE (outside 24h window) ──────
 export interface TemplateParam {
-  name: string
+  name:  string
   value: string
 }
 
 export async function sendTemplateMessage(
-  phone: string,
-  templateName: string,
-  params: TemplateParam[] = [],
-  broadcastName?: string
+  phone:           string,
+  templateName:    string,
+  params:          TemplateParam[] = [],
+  _broadcastName?: string
 ): Promise<boolean> {
-  if (!isWatiConfigured()) {
-    logger.info('whatsapp', '[WhatsApp MOCK] Template not sent (not configured)', { template: templateName })
+  if (!isMetaConfigured()) {
+    logger.info('whatsapp','[WhatsApp MOCK] Template not sent (Meta not configured)',
+      { template: templateName })
     return false
   }
-
   try {
-    await watiRequest('/sendTemplateMessage', 'POST', {
-      whatsappNumber: toWatiPhone(phone),
-      template_name: templateName,
-      broadcast_name: broadcastName || templateName,
-      parameters: params,
-    })
+    const metaParams = params.map(p => ({ type: 'text', text: p.value }))
+    const templatePayload: Record<string, unknown> = {
+      messaging_product: 'whatsapp',
+      to:                normalizePhone(phone),
+      type:              'template',
+      template: {
+        name:       templateName,
+        language:   { code: 'en' },
+        components: metaParams.length > 0
+          ? [{ type: 'body', parameters: metaParams }]
+          : [],
+      },
+    }
+    await metaRequest(templatePayload)
     return true
   } catch (err) {
-    logger.error('whatsapp', 'sendTemplateMessage error', err)
+    logger.error('whatsapp','sendTemplateMessage error', err)
     return false
   }
 }
 
-// ─── BROADCAST CAMPAIGN ──────────────────────────────────
+// ─── BROADCAST CAMPAIGN ───────────────────────────────────────
 export interface BroadcastRecipient {
   whatsappNumber: string
-  customParams?: TemplateParam[]
+  customParams?:  TemplateParam[]
 }
 
 export async function sendBroadcastCampaign(
-  recipients: BroadcastRecipient[],
-  templateName: string,
+  recipients:    BroadcastRecipient[],
+  templateName:  string,
   broadcastName: string
 ): Promise<{ success: number; failed: number }> {
-  if (!isWatiConfigured()) {
-    logger.info('whatsapp', '[WhatsApp MOCK] Broadcast not sent (not configured)', { count: recipients.length })
+  if (!isMetaConfigured()) {
+    logger.info('whatsapp','[WhatsApp MOCK] Broadcast not sent (Meta not configured)',
+      { count: recipients.length })
     return { success: 0, failed: recipients.length }
   }
-
   let success = 0
-  let failed = 0
-
+  let failed  = 0
   for (const r of recipients) {
     const ok = await sendTemplateMessage(
-      r.whatsappNumber,
-      templateName,
-      r.customParams,
-      broadcastName
+      r.whatsappNumber, templateName, r.customParams, broadcastName
     )
     if (ok) success++
-    else failed++
-    await new Promise(res => setTimeout(res, 120)) // rate limit
+    else    failed++
+    await new Promise(res => setTimeout(res, 120))
   }
-
   return { success, failed }
 }
 
-// ─── INCOMING MESSAGE TYPES ──────────────────────────────
-export interface WatiIncomingMessage {
-  id: string
-  waId: string
-  wamid: string
-  timestamp: string
-  owner: string
-  text?: string
-  type: 'text' | 'image' | 'audio' | 'video' | 'document' | 'voice' | 'location' | 'interactive'
-  data?: {
-    text?: string
-    caption?: string
-    filename?: string
-    id?: string
-    url?: string
-  }
-  listReply?: { id: string; title: string }
-  buttonReply?: { id: string; title: string }
-}
-
-export interface WatiWebhookPayload {
-  type: 'message' | 'status'
-  waId: string
-  senderName: string
-  messages?: WatiIncomingMessage[]
-  statuses?: Array<{ id: string; status: 'sent' | 'delivered' | 'read' | 'failed' }>
-}
-
-export function extractMessageText(msg: WatiIncomingMessage): string {
-  if (msg.type === 'text' && msg.text) return msg.text
-  if (msg.data?.text) return msg.data.text
-  if (msg.data?.caption) return msg.data.caption
-  if (msg.listReply?.title) return msg.listReply.title
-  if (msg.buttonReply?.title) return msg.buttonReply.title
+// ─── UTILITY: EXTRACT TEXT FROM INCOMING MESSAGE ──────────────
+export function extractMessageText(msg: {
+  type:         string
+  text?:        { body: string }
+  data?:        { text?: string; caption?: string }
+  listReply?:   { title: string }
+  buttonReply?: { title: string }
+}): string {
+  if (msg.type === 'text' && msg.text?.body) return msg.text.body
+  if (msg.data?.text)                         return msg.data.text
+  if (msg.data?.caption)                      return msg.data.caption
+  if (msg.listReply?.title)                   return msg.listReply.title
+  if (msg.buttonReply?.title)                 return msg.buttonReply.title
   return ''
-}
-
-// ─── WEBHOOK SIGNATURE VERIFICATION ─────────────────────
-export function verifyWatiWebhook(payload: string, signature: string): boolean {
-  const secret = process.env.WATI_WEBHOOK_SECRET
-  if (!secret) return true // skip if not configured
-
-  try {
-    const crypto = require('crypto')
-    const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex')
-    return signature === expected
-  } catch {
-    return false
-  }
-}
-
-// ─── INTERAKT ADAPTER (alternative provider) ─────────────
-export async function sendInteraktMessage(phone: string, message: string): Promise<boolean> {
-  const key = process.env.INTERAKT_API_KEY
-  if (!key) {
-    logger.info('whatsapp', 'Interakt not configured — message skipped (mock mode)')
-    return false
-  }
-
-  try {
-    const c = phone.replace(/\D/g, '')
-    const res = await fetch('https://api.interakt.ai/v1/public/message/', {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${key}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        countryCode: '+91',
-        phoneNumber: c,
-        callbackData: 'aria-reply',
-        type: 'Text',
-        data: { message },
-      }),
-    })
-    return res.ok
-  } catch (err) {
-    logger.error('whatsapp', 'sendInteraktMessage error', err)
-    return false
-  }
 }
