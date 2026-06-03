@@ -18,6 +18,17 @@ const PIPELINE: Array<{ status: string; label: string; color: string; bg: string
   { status: 'future_prospect',  label: 'Future Prospect', color: '#4b5563', bg: '#f9fafb' },
 ]
 
+// ─── Timezone helper ──────────────────────────────────────────────────────────
+// Converts a UTC ISO string to the YYYY-MM-DDTHH:mm format required by
+// datetime-local inputs, expressed in the browser's local timezone.
+// "2026-06-03T12:00:00.000Z" → "2026-06-03T17:30" for IST (UTC+5:30)
+function toLocalDatetimeInput(utcIso: string): string {
+  const d      = new Date(utcIso)
+  const offset = d.getTimezoneOffset() * 60000       // minutes → ms
+  const local  = new Date(d.getTime() - offset)
+  return local.toISOString().slice(0, 16)            // "YYYY-MM-DDTHH:mm"
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function KanbanPage() {
@@ -143,7 +154,6 @@ export default function KanbanPage() {
             <RefreshCw size={15} style={{ color: 'var(--slate)' }} className={isLoading ? 'animate-spin' : ''} />
           </button>
 
-          {/* ✅ FIXED: routes to /proposals/new */}
           <a
             href="/proposals/new"
             className="text-sm px-4 py-2 rounded-lg text-white"
@@ -327,7 +337,6 @@ export default function KanbanPage() {
                   </a>
                 )}
 
-                {/* ✅ FIXED: routes to /proposals/new with pre-filled querystring */}
                 <a
                   href={proposalHref(selectedLead)}
                   className="block w-full text-center py-2.5 rounded-lg text-sm font-medium border"
@@ -369,18 +378,25 @@ export default function KanbanPage() {
                     id="kfup-date"
                     className="flex-1 text-xs px-2 py-1.5 rounded-lg border"
                     style={{ borderColor: 'var(--border)', color: 'var(--charcoal)' }}
-                    defaultValue={selectedLead.followup_date ? selectedLead.followup_date.slice(0, 16) : ''}
+                    defaultValue={
+                      selectedLead.followup_date
+                        ? toLocalDatetimeInput(selectedLead.followup_date)
+                        : ''
+                    }
                   />
                   <button
                     onClick={async () => {
                       const val = (document.getElementById('kfup-date') as HTMLInputElement)?.value
                       if (!val) return
+                      const utcValue = new Date(val).toISOString()
+                      console.log('[FollowUp] local input:', val)
+                      console.log('[FollowUp] utc value:', utcValue)
                       await fetch('/api/followups', {
                         method : 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body   : JSON.stringify({ action: 'schedule', lead_id: selectedLead.id, followup_date: val }),
+                        body   : JSON.stringify({ action: 'schedule', lead_id: selectedLead.id, followup_date: utcValue }),
                       })
-                      setSelectedLead({ ...selectedLead, followup_date: val })
+                      setSelectedLead({ ...selectedLead, followup_date: utcValue })
                     }}
                     className="text-xs px-3 py-1.5 rounded-lg text-white"
                     style={{ background: 'var(--gold)' }}
