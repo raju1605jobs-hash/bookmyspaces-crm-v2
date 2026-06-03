@@ -93,8 +93,10 @@ async function metaRequest(body: Record<string, unknown>): Promise<unknown> {
   }
 
   const responseText = await res.text()
-  console.log(`[WhatsApp] Meta API response: status=${res.status}`)
-  console.log(`[WhatsApp] Meta API body    : ${responseText}`)
+
+  console.error('[META FULL RESPONSE]')
+  console.error(res.status)
+  console.error(responseText)
 
   if (!res.ok) {
     throw new Error(`Meta API ${res.status}: ${responseText}`)
