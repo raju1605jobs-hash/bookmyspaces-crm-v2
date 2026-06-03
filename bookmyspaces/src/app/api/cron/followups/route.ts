@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
     const ok      = await smartSend(lead.phone, message, { forceSpamCheck: true })
 
     if (ok) {
-      await db.from('follow_ups').update({ status: 'completed', sent_at: now }).eq('id', row.id)
+      await db.from('follow_ups').update({ status: 'sent', sent_at: now }).eq('id', row.id)
       await db.from('leads').update({ last_contacted_at: now, whatsapp_last_message_at: now }).eq('id', lead.id)
       sent++
     } else {
