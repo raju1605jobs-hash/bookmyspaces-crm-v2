@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
   let failed  = 0
 
   for (const followUp of dueFollowUps) {
-    const lead = followUp.leads as {
+    const lead = (Array.isArray(followUp.leads) ? followUp.leads[0] : followUp.leads) as {
       id:                 string
       name:               string | null
       phone:              string | null
