@@ -40,3 +40,4 @@ logs/
 *.log
 
 *.zip
+.env.local.20260603.backup
