@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     .select(`
       id,
       lead_id,
-      notes,
+      message,
       leads (
         id,
         name,
@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
     if (!lead?.phone || lead.whatsapp_opted_in === false) {
       await db
         .from('follow_ups')
-        .update({ status: 'skipped', completed_at: now, updated_at: now })
+        .update({ status: 'skipped', sent_at: now })
         .eq('id', followUp.id)
       skipped++
       continue
@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
       // Mark follow-up complete
       await db
         .from('follow_ups')
-        .update({ status: 'completed', completed_at: now, updated_at: now })
+        .update({ status: 'completed', sent_at: now })
         .eq('id', followUp.id)
 
       // Update lead timestamps
@@ -103,7 +103,6 @@ export async function GET(request: NextRequest) {
         .update({
           last_contacted_at:        now,
           whatsapp_last_message_at: now,
-          updated_at:               now,
         })
         .eq('id', lead.id)
 
@@ -129,4 +128,7 @@ export async function GET(request: NextRequest) {
     failed,
   })
 }
+
+
+
 
