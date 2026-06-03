@@ -82,6 +82,13 @@ export async function POST(req: NextRequest) {
       if (!followup_date) return NextResponse.json({ error: 'followup_date required' }, { status: 400 })
       const { error } = await supabaseAdmin.from('leads').update({ followup_date }).eq('id', lead_id)
       if (error) throw error
+      await supabaseAdmin.from('follow_ups').insert({
+        lead_id,
+        type: 'whatsapp',
+        status: 'pending',
+        scheduled_at: followup_date,
+        message: 'Scheduled follow-up',
+      })
       await supabaseAdmin.from('activity_logs').insert({
         lead_id, action: 'followup_scheduled',
         description: `Follow-up scheduled for ${new Date(followup_date).toLocaleDateString('en-IN')}`,
