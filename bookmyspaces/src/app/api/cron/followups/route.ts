@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
   if (fetchError) {
     console.error('[Cron/followups] DB fetch error:', fetchError)
-    return NextResponse.json({ error: 'DB error' }, { status: 500 })
+    return NextResponse.json({ error: 'DB error', message: fetchError.message, code: fetchError.code, details: fetchError.details, hint: fetchError.hint }, { status: 500 })
   }
 
   if (!dueFollowUps || dueFollowUps.length === 0) {
@@ -129,3 +129,4 @@ export async function GET(request: NextRequest) {
     failed,
   })
 }
+
