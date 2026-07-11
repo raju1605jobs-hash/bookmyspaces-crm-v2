@@ -1,3 +1,9 @@
+// SUPERSEDED (ISS-020, 2026-07-11): this file's content was copied to the correctly
+// named `route.ts` in this same folder, which is what Next.js actually registers.
+// This file is never loaded by the router (wrong filename) and can be deleted —
+// left in place only because this sandbox's mounted filesystem does not permit
+// file deletion. Please `rm` this file from your own machine.
+// ─────────────────────────────────────────────────────────────────────────────
 // src/app/api/leads/[id]/stage/route.ts
 // PATCH /api/leads/:id/stage — update lead stage with validation
 // ─────────────────────────────────────────────────────────────────────────────

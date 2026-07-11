@@ -6,8 +6,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { batchScoreLeads } from '@/lib/scoring'
+import { requireAuth } from '@/lib/auth-guard'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   try {
     // IMPORTANT:
     // Create Supabase client INSIDE request handler
@@ -248,6 +251,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   try {
     // IMPORTANT:
     // Create client INSIDE handler

@@ -25,12 +25,19 @@
     },
     "src/app/api/cron/followups/route.ts": {
       "maxDuration": 30
+    },
+    "src/app/api/cron/escalations/route.ts": {
+      "maxDuration": 30
     }
   },
   "crons": [
     {
       "path":     "/api/cron/followups",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path":     "/api/cron/escalations",
+      "schedule": "0 */6 * * *"
     }
   ]
 }

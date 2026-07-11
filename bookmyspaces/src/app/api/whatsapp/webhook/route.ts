@@ -2,6 +2,7 @@
 // Meta Cloud API webhook — verification + inbound message handling
 
 import { NextRequest, NextResponse } from 'next/server'
+import crypto                        from 'crypto'
 import { sendWhatsAppMessage }       from '@/lib/whatsapp'
 import { getSupabaseAdmin }          from '@/lib/supabase'
 
@@ -43,13 +44,56 @@ export async function GET(request: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 })
 }
 
+// ─── Signature verification ───────────────────────────────────
+// ISS-004 (audit/MASTER_ISSUE_REGISTER.csv): the POST handler previously had no
+// signature/HMAC verification at all — anyone who discovered the webhook URL
+// could forge inbound messages. Meta signs every webhook POST body with
+// HMAC-SHA256 using the app's secret (X-Hub-Signature-256: sha256=<hex>).
+//
+// Rollout note (per RISK_REGISTER.md's own recommendation for this issue —
+// "can ship signature check behind a flag that logs-but-doesn't-reject
+// first"): WHATSAPP_APP_SECRET is a NEW env var, not yet in .env.example/
+// .env.local. Until it's configured, verification is skipped (logged once)
+// rather than rejecting all traffic — this matches today's exact behavior,
+// so deploying this code alone changes nothing until the secret is set.
+// Once WHATSAPP_APP_SECRET is present, invalid/forged signatures are
+// rejected with 403 and never reach handleIncomingMessage().
+function verifySignature(rawBody: string, signatureHeader: string | null): 'valid' | 'invalid' | 'unconfigured' {
+  const appSecret = process.env.WHATSAPP_APP_SECRET
+  if (!appSecret) return 'unconfigured'
+
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return 'invalid'
+
+  const expected = crypto
+    .createHmac('sha256', appSecret)
+    .update(rawBody, 'utf8')
+    .digest('hex')
+  const provided = signatureHeader.slice('sha256='.length)
+
+  const expectedBuf = Buffer.from(expected, 'hex')
+  const providedBuf = Buffer.from(provided, 'hex')
+  if (expectedBuf.length !== providedBuf.length) return 'invalid'
+
+  return crypto.timingSafeEqual(expectedBuf, providedBuf) ? 'valid' : 'invalid'
+}
+
 // ─── POST — Incoming messages & status updates ────────────────
 // Always return 200 — a non-200 causes Meta to retry for 72 hours.
 export async function POST(request: NextRequest) {
+  const rawBody = await request.text()
+  const signatureCheck = verifySignature(rawBody, request.headers.get('x-hub-signature-256'))
+
+  if (signatureCheck === 'unconfigured') {
+    console.warn('[WA Webhook] WHATSAPP_APP_SECRET not set — signature NOT verified. Configure it to enable ISS-004 enforcement.')
+  } else if (signatureCheck === 'invalid') {
+    console.error('[WA Webhook] Rejected: invalid X-Hub-Signature-256 (forged or misconfigured request).')
+    return new NextResponse('Forbidden', { status: 403 })
+  }
+
   let body: WhatsAppWebhookPayload
 
   try {
-    body = await request.json()
+    body = JSON.parse(rawBody)
   } catch {
     return new NextResponse('Bad Request', { status: 400 })
   }
@@ -100,7 +144,7 @@ async function handleIncomingMessage(
   try {
     if (message.type === 'text') {
       const text  = message.text?.body ?? ''
-      const reply = buildAutoReply(text, senderName)
+      const reply = await buildAutoReply(text, senderName)
 
       // Send reply first — never block on DB
       await sendWhatsAppMessage(from, reply)
@@ -191,19 +235,58 @@ async function persistConversation(
 }
 
 // ─── Auto-reply builder ───────────────────────────────────────
-function buildAutoReply(text: string, name: string): string {
+// ISS-047 (audit/MASTER_ISSUE_REGISTER.csv): the "price"/"rate" branch used to return a
+// hardcoded, incorrect generic rate ("Rooms start from ₹1,500/night"). It now queries the
+// live `packages` table (supabase/migrations/007_missing_tables.sql) so the quoted prices
+// always match whatever is actually seeded/active, instead of drifting out of sync again.
+async function buildAutoReply(text: string, name: string): Promise<string> {
   const lower = text.toLowerCase()
 
   if (lower.includes('book') || lower.includes('availability')) {
     return `Hi ${name}! 🏡 Please share your check-in/out dates, number of guests, and property preference (Skyline Serenity or MonuRama) and we'll confirm availability right away!`
   }
   if (lower.includes('price') || lower.includes('rate')) {
-    return `Hi ${name}! Rooms start from ₹1,500/night including breakfast. Share your dates for a precise quote!`
+    return await buildPricingReply(name)
   }
   if (lower.includes('cancel')) {
     return `Hi ${name}! For cancellations see https://www.bookmyspaces.in/cancellation.html or call +91 90514 59463.`
   }
   return `Hi ${name}! 🏡 Thanks for reaching out to Book My Space. Our team will respond shortly. Call us at +91 90514 59463 or visit www.bookmyspaces.in`
+}
+
+// ─── Pricing reply — sourced live from the `packages` table ───
+async function buildPricingReply(name: string): Promise<string> {
+  const fallback = `Hi ${name}! Rooms at Skyline Serenity start from ₹999/night, and our rooftop event packages at MonuRama start from ₹42,000. Share your dates and guest count for a precise quote!`
+
+  try {
+    const db = getSupabaseAdmin()
+    const { data: packages, error } = await db
+      .from('packages')
+      .select('name, base_price, is_popular, max_guests, duration_hours')
+      .eq('is_active', true)
+      .order('tier', { ascending: true })
+
+    if (error || !packages || packages.length === 0) {
+      return fallback
+    }
+
+    const lines = packages.map((p: { name: string; base_price: number; is_popular: boolean; max_guests: number; duration_hours: number }) => {
+      const price = Number(p.base_price || 0).toLocaleString('en-IN')
+      const popular = p.is_popular ? ' ⭐ Most Popular' : ''
+      return `• ${p.name} — ₹${price} (up to ${p.max_guests} guests, ${p.duration_hours}hrs)${popular}`
+    })
+
+    return [
+      `Hi ${name}! Here are our current rooftop event packages at MonuRama:`,
+      ...lines,
+      '',
+      `Rooms at Skyline Serenity start from ₹999/night.`,
+      `Share your event date and guest count for a precise quote!`,
+    ].join('\n')
+  } catch (err) {
+    console.error('[WA Webhook] buildPricingReply failed, using fallback copy:', err)
+    return fallback
+  }
 }
 
 // ─── Types ────────────────────────────────────────────────────

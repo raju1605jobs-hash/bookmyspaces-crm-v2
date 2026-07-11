@@ -39,5 +39,12 @@ Thumbs.db
 logs/
 *.log
 
+# Vercel log-export dumps (ISS-025: these have contained customer PII - name/phone/message
+# content pulled from production logs). Never commit these; they are emptied placeholders now.
+latest.json
+logs.json
+logs.txt
+deployed_route.txt
+
 *.zip
 .env.local.20260603.backup

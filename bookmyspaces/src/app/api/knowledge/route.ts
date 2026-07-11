@@ -7,8 +7,11 @@ import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { STATIC_KNOWLEDGE } from '@/lib/documents'
 import { chunkText } from '@/lib/ai'
+import { requireAuth } from '@/lib/auth-guard'
 
 export async function GET() {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const { data: docs, error } = await supabaseAdmin
@@ -24,6 +27,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
@@ -131,6 +136,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   try {
     const { searchParams } = new URL(req.url)
     const source = searchParams.get('source')

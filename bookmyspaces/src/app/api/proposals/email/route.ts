@@ -5,8 +5,11 @@ export const maxDuration = 30
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-guard'
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const { proposal_id, recipient_email, custom_message } = await req.json()
@@ -33,7 +36,15 @@ export async function POST(req: NextRequest) {
 
     const mailtoUrl = `mailto:${toEmail}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(mailtoBody)}`
 
-    Promise.resolve(supabaseAdmin.from('proposals').update({ email_sent_at: new Date().toISOString(), status: proposal.status === 'draft' ? 'sent' : proposal.status }).eq('id', proposal_id)).catch(() => {})
+    const { error: statusUpdateError } = await supabaseAdmin
+      .from('proposals')
+      .update({ email_sent_at: new Date().toISOString(), status: proposal.status === 'draft' ? 'sent' : proposal.status })
+      .eq('id', proposal_id)
+    if (statusUpdateError) {
+      // Non-fatal: the mailto link below still works even if this bookkeeping write fails,
+      // but ISS-042 requires the failure to be visible instead of silently swallowed.
+      logger.error('proposals-email', 'Failed to update proposal email_sent_at/status', statusUpdateError)
+    }
 
     return NextResponse.json({ success: true, method: 'mailto', mailto_url: mailtoUrl, sent_to: toEmail, note: 'SMTP not configured — use mailto_url to open in email client' })
   } catch (err) {

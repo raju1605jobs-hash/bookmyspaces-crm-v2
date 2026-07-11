@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-guard'
 import {
   generateProposalIntelligence,
   computeProposalUrgency,
@@ -16,6 +17,8 @@ export const dynamic = 'force-dynamic'
 
 // ─── GET — list proposals with intelligence computed client-side ──────────────
 export async function GET(): Promise<NextResponse> {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   try {
     const db = getSupabaseAdmin()
 
@@ -51,6 +54,8 @@ export async function GET(): Promise<NextResponse> {
 
 // ─── POST — generate intelligence content for a lead ─────────────────────────
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   try {
     const body = await req.json() as { lead_id?: string; lead?: LeadSnapshot }
 
@@ -87,6 +92,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 // ─── PATCH — recompute and persist urgency score for a proposal ───────────────
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   try {
     const body = await req.json() as { proposal_id: string }
 

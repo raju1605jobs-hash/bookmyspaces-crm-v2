@@ -1,0 +1,11 @@
+file,loc,tables_created,views_created,rls_enabled_statements,create_policy_count,triggers,functions
+001_initial_schema.sql,266,"leads,conversations,knowledge_chunks,documents,activity_logs",none,5,8,"update_leads_updated_at,update_conversations_updated_at","update_updated_at_column,match_knowledge_chunks"
+002_phase2_whatsapp.sql,117,"message_queue,campaigns",leads_needing_followup (CREATE OR REPLACE),2,2,none,none
+003_phase3_proposals.sql,158,"proposals,bookings,blocked_dates",none,3,4,"update_proposals_updated_at,set_proposal_number",generate_proposal_number
+004_phase4_campaigns.sql,162,"broadcast_campaigns,ai_summaries,festival_calendar,staff_performance,notification_settings",none,4 (notification_settings table created but NEVER gets ENABLE ROW LEVEL SECURITY in this or any later migration),5,none,none
+005_stability_patch.sql,345,none (ALTER/policy patch only),leads_needing_followup (DROP+CREATE - 3rd definition),0,21,"update_proposals_updated_at,update_conversations_updated_at,update_leads_updated_at (all DROP+CREATE)",match_knowledge_chunks (CREATE OR REPLACE)
+006_final_verification.sql,289,none (ALTER/idempotency patch only),leads_needing_followup (DROP+CREATE - 4th definition),0,0,"update_leads_updated_at,update_conversations_updated_at,update_proposals_updated_at (all DROP+CREATE)","update_updated_at_column (CREATE OR REPLACE),match_knowledge_chunks (CREATE OR REPLACE)"
+007_missing_tables.sql,318,"follow_ups,analytics_events,escalations,packages",none,4,5,"update_follow_ups_updated_at,update_packages_updated_at,on_conversation_escalated","track_event,handle_conversation_escalation"
+008_phase1_lead_scoring.sql,111,none (ALTER only - adds columns to leads),"hot_leads,lead_scoring_summary",0,0,none,none
+010_phase5_proposal_intelligence.sql,344,none (ALTER only - adds columns to proposals),"proposal_intelligence_view,proposal_urgency_summary",0,1 (conditional - only if not already present),none,none
+009 (MISSING),N/A,UNKNOWN - no file present in supabase/migrations/ or anywhere in repo,N/A,N/A,N/A,N/A,N/A

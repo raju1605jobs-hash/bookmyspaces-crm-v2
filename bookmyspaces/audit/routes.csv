@@ -1,0 +1,34 @@
+route,file_path,methods,loc,auth_check,auth_mechanism,role_check,db_client,tables_touched,zod_validation,status_codes,console_log_count
+/api/admin/users,src/app/api/admin/users/route.ts,"GET,PATCH,POST",121,YES,getCurrentUser() (supabase-server.ts:43),"YES (user.role check - see AUTH_AUDIT.md)",getSupabaseAdmin() service-role,"active_users_view,user_profiles",NO,"403,500",0
+/api/ai-summary,src/app/api/ai-summary/route.ts,"GET,POST",18,NO,none,NO,none (stub - no DB client imported),none,NO,"(none - stub)",0
+/api/analytics,src/app/api/analytics/route.ts,"GET,POST",282,NO,none,NO,getSupabaseAdmin() service-role,"conversations,leads,proposals",NO,"400,500",0
+/api/auth/callback,src/app/api/auth/callback/route.ts,GET,25,N/A (OAuth code exchange),supabase.auth.exchangeCodeForSession,NO,createServerAuthClient session client,none,NO,(redirects only),0
+/api/auth/logout,src/app/api/auth/logout/route.ts,"POST,GET",23,N/A (signs out current session),supabase.auth.signOut,NO,createServerAuthClient session client,none,NO,(redirects only),0
+/api/campaigns,src/app/api/campaigns/route.ts,"GET,POST,PATCH",174,NO,none,NO,getSupabaseAdmin() service-role,broadcast_campaigns,NO,"201,400,404,500",0
+/api/chat,src/app/api/chat/route.ts,"POST,GET",310,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,conversations,leads",NO,"400,500",0
+/api/conversations,src/app/api/conversations/route.ts,GET,36,NO,none,NO,getSupabaseAdmin() service-role,conversations,NO,500,0
+/api/cron/followups,src/app/api/cron/followups/route.ts,GET,81,YES,Bearer token vs CRON_SECRET (line 11-15),NO,getSupabaseAdmin() service-role,"follow_ups,leads",NO,"401,500",0
+/api/dashboard/revenue,src/app/api/dashboard/revenue/route.ts,GET,250,NO,none,NO,getSupabaseAdmin() service-role,"bookings,leads,proposals",NO,500,4
+/api/dashboard/stats,src/app/api/dashboard/stats/route.ts,GET,117,NO,none,NO,getSupabaseAdmin() service-role,leads,NO,500,2
+/api/followups,src/app/api/followups/route.ts,"GET,POST",151,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,follow_ups,leads",NO,"400,500",0
+/api/health,src/app/api/health/route.ts,GET,103,NO (intentionally public),none,NO,getSupabaseAdmin() service-role,"conversations,knowledge_chunks,leads,leads_needing_followup",NO,(none captured),0
+/api/knowledge,src/app/api/knowledge/route.ts,"GET,POST,DELETE",145,NO,none,NO,getSupabaseAdmin() service-role,"documents,knowledge_chunks",NO,"400,500",0
+/api/leads/hot,src/app/api/leads/hot/route.ts,GET,64,NO,none,NO,getSupabaseAdmin() service-role,leads,NO,500,2
+/api/leads/import,src/app/api/leads/import/route.ts,"POST,GET",185,YES,supabase.auth.getSession() (lines 15,161),NO,createServerAuthClient session client,"lead_imports,leads",NO,"400,401,500",1
+/api/leads,src/app/api/leads/route.ts,"GET,POST,PATCH",79,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,leads",NO,"201,400,500",0
+/api/leads/summary,src/app/api/leads/summary/route.ts,"POST,GET",81,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,conversations,leads,proposals",NO,"400,404,500",0
+/api/notifications,src/app/api/notifications/route.ts,"GET,PATCH",98,YES,getCurrentUser() (lines 13,60),NO,getSupabaseAdmin() service-role,notifications,NO,"401,500",3
+/api/proposal/share/[token],src/app/api/proposal/share/[token]/api--proposal--share--token--route.ts,GET (file misnamed - NOT registered as a route by Next.js),22,UNKNOWN (dead code - not reachable),N/A,N/A,N/A,none,NO,N/A,0
+/api/proposals/[id]/invoice,src/app/api/proposals/[id]/invoice/route.ts,GET,509,NO,none,NO,getSupabaseAdmin() service-role,"invoices,payments,proposals",NO,"404,500",5
+/api/proposals/[id]/payment,src/app/api/proposals/[id]/payment/route.ts,"POST,GET",101,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,payments,proposals",NO,"201,400,404,500",0
+/api/proposals/[id]/pdf,src/app/api/proposals/[id]/pdf/route.ts,GET,145,NO,none,NO,getSupabaseAdmin() service-role,proposals,NO,"404,500",0
+/api/proposals/[id]/preview,src/app/api/proposals/[id]/preview/route.ts,GET,25,NO,none,NO,getSupabaseAdmin() service-role,proposals,NO,"404,500",0
+/api/proposals/[id]/receipt,src/app/api/proposals/[id]/receipt/route.ts,GET,377,NO,none,NO,getSupabaseAdmin() service-role,"payments,proposals",NO,"404,500",0
+/api/proposals/email,src/app/api/proposals/email/route.ts,POST,43,NO,none,NO,getSupabaseAdmin() service-role,proposals,NO,"400,404,500",0
+/api/proposals/intelligence,src/app/api/proposals/intelligence/route.ts,"GET,POST,PATCH",170,NO,none,NO,getSupabaseAdmin() service-role,"leads,proposals",NO,"400,404,500",4
+/api/proposals,src/app/api/proposals/route.ts,"GET,POST,PATCH,PUT",288,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,leads,proposals",NO,"201,400,404,500",0
+/api/proposals/track-view,src/app/api/proposals/track-view/route.ts,POST,88,NO,none,NO,getSupabaseAdmin() service-role,proposals,NO,(none captured),2
+/api/leads/[id]/stage,src/app/api/leads/[id]/stage/lead-stage-route.ts,PATCH (file misnamed - NOT registered as a route by Next.js),53,UNKNOWN (dead code - not reachable),N/A,N/A,N/A,none (would touch leads via modules/leads/lead-stage-manager.ts),NO,N/A,0
+/api/whatsapp/campaigns,src/app/api/whatsapp/campaigns/route.ts,"GET,POST",61,NO,none,NO,getSupabaseAdmin() service-role,"broadcast_campaigns,leads",NO,500,0
+/api/whatsapp/send,src/app/api/whatsapp/send/route.ts,POST,49,NO,none,NO,getSupabaseAdmin() service-role,"activity_logs,leads",NO,"400,500",0
+/api/whatsapp/webhook,src/app/api/whatsapp/webhook/route.ts,"GET,POST",251,PARTIAL,GET verifies hub.verify_token (line 17); POST has no signature verification,NO,getSupabaseAdmin() service-role,"conversations,leads",NO,"200,400,403,500",4

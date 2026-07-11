@@ -1,0 +1,24 @@
+variable,process_env_call_sites_in_src,declared_in_env_example,used_anywhere_in_src,centralized_access,notes
+NEXT_PUBLIC_SUPABASE_URL,7,YES,YES,NO (read directly in supabase.ts/supabase-server.ts/supabase-middleware.ts/supabase-route-handler.ts/supabase-browser.ts each),Read directly with non-null assertion (!) in multiple client-construction files
+ANTHROPIC_API_KEY,7,YES,YES,NO,read directly wherever Anthropic SDK is invoked
+NEXT_PUBLIC_SUPABASE_ANON_KEY,6,YES,YES,NO,same pattern as SUPABASE_URL
+OPENAI_API_KEY,4,YES,YES,NO,read directly wherever OpenAI SDK is invoked
+GOOGLE_SHEETS_ID,4,YES,YES,NO,used in src/lib/sheets.ts
+WHATSAPP_PHONE_NUMBER_ID,3,NOT in .env.example (only WATI_* vars documented for WhatsApp),YES,NO,live Meta integration var; not documented in .env.example despite being required for src/lib/whatsapp.ts
+WHATSAPP_ACCESS_TOKEN,3,NOT in .env.example,YES,NO,same as above
+WATI_API_TOKEN,2,YES,YES (src/lib/transcription.ts and src/app/api/health/route.ts),NO,legacy/superseded integration per code comments; still read by health check
+NEXT_PUBLIC_SITE_URL,2,NOT in .env.example (.env.example has NEXT_PUBLIC_APP_URL instead),YES,NO,used in src/app/api/auth/logout/route.ts as redirect fallback base - name mismatch vs NEXT_PUBLIC_APP_URL in .env.example
+GOOGLE_SERVICE_ACCOUNT_EMAIL,2,YES,YES,NO,used in src/lib/sheets.ts
+GOOGLE_PRIVATE_KEY,2,YES,YES,NO,used in src/lib/sheets.ts
+WHATSAPP_WEBHOOK_VERIFY_TOKEN,1,NOT in .env.example (.env.example has WATI_VERIFY_TOKEN instead),YES,NO,used in src/app/api/whatsapp/webhook/route.ts GET handshake
+WATI_BASE_URL,1,YES,YES (src/app/api/health/route.ts only),NO,legacy var, checked by health endpoint only
+SUPABASE_SERVICE_ROLE_KEY,1 (direct),YES,YES,YES (centralized in src/lib/supabase.ts getSupabaseAdmin(), all other files import the function rather than reading the var directly),the one env var with genuinely centralized access
+NODE_ENV,1,implicit (Next.js provided),YES,NO,not app-specific
+NEXT_PUBLIC_BUSINESS_WHATSAPP,1,YES,YES,NO,
+NEXT_PUBLIC_APP_URL,1,YES,YES,NO,
+CRON_SECRET,1,NOT in .env.example,YES,NO,required by src/app/api/cron/followups/route.ts but absent from .env.example - would need to be discovered/guessed by a new deployer
+ADMIN_EMAIL,0,YES,NO (zero process.env.ADMIN_EMAIL call sites found in src/),N/A,declared but dead - real auth is Supabase Auth (see AUTH_AUDIT.md)
+ADMIN_PASSWORD,0,YES,NO,N/A,same as ADMIN_EMAIL
+WATI_VERIFY_TOKEN,0 (webhook route uses WHATSAPP_WEBHOOK_VERIFY_TOKEN instead),YES,NO,N/A,declared in .env.example but the live webhook route reads a differently-named var
+WATI_WEBHOOK_SECRET,0,YES,NO,N/A,declared but no HMAC verification code exists anywhere (see BUG-04 in prior BUG_REPORT.md / AUTH_AUDIT.md)
+NEXT_PUBLIC_BUSINESS_PHONE,0,YES,NO,N/A,declared but not found via process.env grep in src/

@@ -7,8 +7,11 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { logger } from '@/lib/logger'
 import { sendBroadcastCampaign } from '@/lib/whatsapp'
 import { APPROVED_TEMPLATES, TEMPLATE_PARAMS } from '@/lib/templates'
+import { requireAuth } from '@/lib/auth-guard'
 
 export async function GET() {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const { data } = await supabaseAdmin.from('broadcast_campaigns').select('*').order('created_at', { ascending: false }).limit(20)
@@ -19,6 +22,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()

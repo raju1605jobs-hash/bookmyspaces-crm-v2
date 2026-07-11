@@ -7,8 +7,11 @@ import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { smartSend } from '@/lib/queue'
 import { WHATSAPP_MESSAGES } from '@/lib/templates'
+import { requireAuth } from '@/lib/auth-guard'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   const { searchParams } = new URL(req.url)
   const leadId = searchParams.get('lead_id')
@@ -73,6 +76,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()

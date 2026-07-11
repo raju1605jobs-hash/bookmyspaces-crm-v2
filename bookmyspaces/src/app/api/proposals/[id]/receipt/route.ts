@@ -7,6 +7,7 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-guard'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -329,6 +330,8 @@ export async function GET(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabase = getSupabaseAdmin()
   try {
     const { searchParams } = new URL(req.url)

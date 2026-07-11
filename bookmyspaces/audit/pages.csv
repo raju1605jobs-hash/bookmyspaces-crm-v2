@@ -1,0 +1,13 @@
+route,file_path,loc,implemented_status,notes
+/dashboard,src/app/(crm)/dashboard/page.tsx,6,IMPLEMENTED (thin wrapper),delegates to colocated src/app/(crm)/dashboard/HotLeadDashboard.tsx (932 LOC)
+/campaigns,src/app/(crm)/campaigns/page.tsx,526,IMPLEMENTED,no TODO/placeholder markers found
+/dashboard/leads/import,src/app/(crm)/dashboard/leads/import/page.tsx,340,IMPLEMENTED,no TODO/placeholder markers found
+/dashboard/revenue,src/app/(crm)/dashboard/revenue/page.tsx,403,IMPLEMENTED,no TODO/placeholder markers found
+/kanban,src/app/(crm)/kanban/page.tsx,735,IMPLEMENTED,no TODO/placeholder markers found
+/proposals/new,src/app/(crm)/proposals/new/page.tsx,566,IMPLEMENTED,no TODO/placeholder markers found
+/proposals,src/app/(crm)/proposals/page.tsx,1129,IMPLEMENTED,largest page file in repo
+/proposals/share/[token],src/app/(crm)/proposals/share/[token]/page.tsx,207,IMPLEMENTED,queries Supabase directly client-side rather than via the (dead) API route - see AUTH_AUDIT.md
+/settings,src/app/(crm)/settings/page.tsx,610,IMPLEMENTED,no TODO/placeholder markers found
+/whatsapp,src/app/(crm)/whatsapp/page.tsx,569,IMPLEMENTED,no TODO/placeholder markers found
+/admin,src/app/admin/page.tsx,239,IMPLEMENTED,knowledge-base admin UI
+/analytics,src/app/analytics/page.tsx,444,IMPLEMENTED,no TODO/placeholder markers found

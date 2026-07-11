@@ -1,18 +1,21 @@
 // src/app/api/admin/users/route.ts
 // Admin-only user management API.
+// ISS-003 (audit/MASTER_ISSUE_REGISTER.csv): the old checks compared
+// user.role (raw GoTrue auth role, never 'admin'/'manager') instead of
+// joining against user_profiles.role. Now uses requireRole(), which does
+// that join (src/lib/auth-guard.ts). user_profiles confirmed present on the
+// live database (SCHEMA_DRIFT_REPORT.md, Category A).
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { getCurrentUser } from '@/lib/supabase-server'
+import { requireRole } from '@/lib/auth-guard'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(): Promise<NextResponse> {
   try {
-    const user = await getCurrentUser()
-    if (!user || (user.role !== 'admin' && user.role !== 'manager')) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-    }
+    const auth = await requireRole(['admin', 'manager'])
+    if (!auth.ok) return auth.response
 
     const db = getSupabaseAdmin()
     const { data, error } = await db
@@ -29,10 +32,8 @@ export async function GET(): Promise<NextResponse> {
 
 export async function PATCH(req: NextRequest): Promise<NextResponse> {
   try {
-    const user = await getCurrentUser()
-    if (!user || user.role !== 'admin') {
-      return NextResponse.json({ error: 'Admin only' }, { status: 403 })
-    }
+    const auth = await requireRole(['admin'])
+    if (!auth.ok) return auth.response
 
     const body = await req.json() as {
       user_id   : string
@@ -70,10 +71,9 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
-    const user = await getCurrentUser()
-    if (!user || user.role !== 'admin') {
-      return NextResponse.json({ error: 'Admin only' }, { status: 403 })
-    }
+    const auth = await requireRole(['admin'])
+    if (!auth.ok) return auth.response
+    const { user } = auth
 
     const body = await req.json() as {
       email     : string

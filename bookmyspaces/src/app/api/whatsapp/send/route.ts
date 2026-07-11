@@ -6,8 +6,11 @@ import { logger } from '@/lib/logger'
 import { smartSend } from '@/lib/queue'
 import { WHATSAPP_MESSAGES } from '@/lib/templates'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-guard'
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()

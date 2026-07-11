@@ -1,9 +1,17 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Allow all origins for server actions (Vercel handles security)
+  // ISS-033 (audit/MASTER_ISSUE_REGISTER.csv): was ['*'] — any origin could invoke
+  // Server Actions on behalf of a logged-in user's browser session (CSRF exposure).
+  // Restricted to the real production domain, Vercel preview deployments, and
+  // localhost for development. Update this list if a custom domain is added.
   experimental: {
     serverActions: {
-      allowedOrigins: ['*'],
+      allowedOrigins: [
+        'bookmyspaces.in',
+        'www.bookmyspaces.in',
+        '*.vercel.app',
+        'localhost:3000',
+      ],
     },
   },
   images: {

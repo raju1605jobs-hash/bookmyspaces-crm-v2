@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { v4 as uuidv4 } from 'uuid'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-guard'
 import { generateProposalCoverNote } from '@/lib/scoring'
 import { parseEventDate } from '@/lib/ai'
 
@@ -35,6 +36,8 @@ function calcRoomsTotal(rooms: RoomItem[]): number {
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const { searchParams } = new URL(req.url)
@@ -72,6 +75,8 @@ export async function GET(req: NextRequest) {
 // ─── POST ─────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
@@ -189,6 +194,8 @@ export async function POST(req: NextRequest) {
 // ─── PATCH ────────────────────────────────────────────────────────────────────
 
 export async function PATCH(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
@@ -223,6 +230,8 @@ export async function PATCH(req: NextRequest) {
 // ─── PUT (tracking actions) ───────────────────────────────────────────────────
 
 export async function PUT(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()

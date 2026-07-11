@@ -7,6 +7,7 @@ export const runtime = 'nodejs'
 import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { requireAuth } from '@/lib/auth-guard'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -426,6 +427,8 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabase = getSupabaseAdmin()
   try {
     const { data: proposal, error: propErr } = await supabase
@@ -445,11 +448,6 @@ export async function GET(
       .order('payment_date', { ascending: true })
 
     const allPayments = payments ?? []
-    console.log("=== INVOICE DEBUG ===")
-    console.log("PROPOSAL ID:", params.id)
-    console.log("PAYMENT COUNT:", allPayments.length)
-    console.log("PAYMENTS:", JSON.stringify(allPayments.map((p:any)=>({id:p.id,receipt:p.receipt_number,amount:p.amount,proposal_id:p.proposal_id}))))
-    console.log("TOTAL RECEIVED:", allPayments.reduce((s:number,p:any)=>s+Number(p.amount||0),0))
     const totalPaid   = allPayments.reduce((s: number, p: any) => s + Number(p.amount || 0), 0)
     const balanceDue  = Math.max(0, Number(proposal.total_price || 0) - totalPaid)
 

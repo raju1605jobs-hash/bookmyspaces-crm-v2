@@ -1,0 +1,83 @@
+{
+  "roadmap_type": "planning only - no code modified, no application changes made",
+  "source_audit_folder": "C:\\rajubmp\\bookmyspaces\\audit",
+  "issue_register_source_of_truth": "MASTER_ISSUE_REGISTER.csv",
+  "totals": {
+    "total_issues": 52,
+    "by_severity": { "Critical": 5, "High": 16, "Medium": 14, "Low": 17 },
+    "by_status": { "Ready": 33, "Blocked": 8, "Deferred": 11 },
+    "estimated_hours_low": 200,
+    "estimated_hours_high": 355,
+    "estimated_weeks_one_engineer": "5-9",
+    "estimated_weeks_two_engineers": "2.5-4.5"
+  },
+  "critical_issues": [
+    { "id": "ISS-001", "title": "Zero authentication enforcement anywhere in the request path", "phase": "Phase 2" },
+    { "id": "ISS-002", "title": "26 of 31 API routes perform no session/auth check at all", "phase": "Phase 2" },
+    { "id": "ISS-009", "title": "5 tables/views used by live routes absent from every migration", "phase": "Phase 3" },
+    { "id": "ISS-010", "title": "leads.lead_stage column used extensively but never created by migration", "phase": "Phase 3" },
+    { "id": "ISS-031", "title": "No automated testing of any kind exists", "phase": "Phase 9 (setup Phase 0/1)" }
+  ],
+  "phases": [
+    { "phase": 0, "name": "Backup, Branching, Investigation", "hours_low": 4, "hours_high": 10, "key_issues": ["ISS-011", "ISS-049", "ISS-025"] },
+    { "phase": 1, "name": "Critical Security (quick wins)", "hours_low": 4, "hours_high": 8, "key_issues": ["ISS-040", "ISS-031"] },
+    { "phase": 2, "name": "Authentication", "hours_low": 40, "hours_high": 70, "key_issues": ["ISS-006", "ISS-001", "ISS-002", "ISS-003", "ISS-004", "ISS-026", "ISS-027", "ISS-028", "ISS-033"] },
+    { "phase": 3, "name": "Database", "hours_low": 16, "hours_high": 30, "key_issues": ["ISS-009", "ISS-010", "ISS-007", "ISS-008", "ISS-012", "ISS-013"] },
+    { "phase": 4, "name": "Infrastructure Cleanup", "hours_low": 10, "hours_high": 18, "key_issues": ["ISS-019", "ISS-020", "ISS-021", "ISS-022", "ISS-023", "ISS-024", "ISS-032"] },
+    { "phase": 5, "name": "Business Logic", "hours_low": 30, "hours_high": 55, "key_issues": ["ISS-015", "ISS-016", "ISS-017", "ISS-018", "ISS-005", "ISS-042", "ISS-014"] },
+    { "phase": 6, "name": "Integrations", "hours_low": 12, "hours_high": 20, "key_issues": ["ISS-041", "ISS-047", "ISS-043"] },
+    { "phase": 7, "name": "UI", "hours_low": 1, "hours_high": 2, "key_issues": ["ISS-028"] },
+    { "phase": 8, "name": "Performance & Code Quality", "hours_low": 40, "hours_high": 70, "key_issues": ["ISS-036", "ISS-037", "ISS-038", "ISS-029", "ISS-034", "ISS-030", "ISS-035", "ISS-039", "ISS-044", "ISS-045", "ISS-046", "ISS-051"] },
+    { "phase": 9, "name": "Testing", "hours_low": 30, "hours_high": 50, "key_issues": ["ISS-048", "ISS-052"] },
+    { "phase": 10, "name": "Production Readiness", "hours_low": 12, "hours_high": 20, "key_issues": ["ISS-050"] }
+  ],
+  "production_scorecard": {
+    "authentication": 1,
+    "authorization": 1,
+    "database": 4,
+    "security_overall": 2,
+    "api": 4,
+    "frontend": 6,
+    "backend": 5,
+    "performance": 5,
+    "scalability": 5,
+    "maintainability": 4,
+    "code_quality": 5,
+    "documentation": 3,
+    "deployment": 4,
+    "testing": 0,
+    "business_logic": 5,
+    "overall_production_readiness": 3
+  },
+  "decisions_required_before_implementation": [
+    { "issue": "ISS-006", "decision": "Service-role-everywhere + route-level auth vs. session-scoped clients + real RLS enforcement", "blocks": ["ISS-002", "ISS-003"] },
+    { "issue": "ISS-015", "decision": "Finish and wire in the dead WhatsApp v2 subsystem vs. delete it", "blocks": ["ISS-043"] },
+    { "issue": "ISS-017", "decision": "Where/how the escalation engine should trigger (cron vs. inline)", "blocks": [] },
+    { "issue": "ISS-018", "decision": "Reconcile follow-up module against existing cron/followups logic before wiring", "blocks": [] },
+    { "issue": "ISS-023", "decision": "Explicit user sign-off required before deleting BOOKMYSPACES_BACKUP/", "blocks": [] }
+  ],
+  "root_blockers": [
+    { "issue": "ISS-049", "description": "Live database investigation required to resolve ISS-009 and ISS-010's true root cause", "unblocks": ["ISS-009", "ISS-010"] },
+    { "issue": "ISS-025", "description": "Review of stray root files for sensitive content; may escalate to a security incident", "unblocks": [] }
+  ],
+  "fastest_safe_release_path": {
+    "phases": [0, 1, 2, 3],
+    "estimated_hours_low": 60,
+    "estimated_hours_high": 118,
+    "rationale": "Phases 0-3 close every Critical-severity issue and establish a safety net (tests, backups) for everything after. Phases 4 onward improve quality/completeness but do not block a safe first release."
+  },
+  "output_files_produced": [
+    "IMPLEMENTATION_ROADMAP.md",
+    "MASTER_ISSUE_REGISTER.md",
+    "MASTER_ISSUE_REGISTER.csv",
+    "DEPENDENCY_GRAPH.md",
+    "IMPLEMENTATION_PHASES.md",
+    "IMPLEMENTATION_ORDER.md",
+    "RISK_REGISTER.md",
+    "TEST_PLAN.md",
+    "PRODUCTION_SCORECARD.md",
+    "EXECUTIVE_SUMMARY.md",
+    "NEXT_STEPS.md",
+    "ROADMAP.json"
+  ]
+}

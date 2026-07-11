@@ -6,9 +6,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { buildSegment, generateFestivalMessage, generateCampaignMessage, getUpcomingFestivals } from '@/lib/campaigns'
+import { requireAuth } from '@/lib/auth-guard'
 
 // GET — list campaigns + upcoming festivals
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const { searchParams } = new URL(req.url)
@@ -36,6 +39,8 @@ export async function GET(req: NextRequest) {
 
 // POST — create, preview, or send campaign
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()
@@ -153,6 +158,8 @@ export async function POST(req: NextRequest) {
 
 // PATCH — update campaign
 export async function PATCH(req: NextRequest) {
+  const auth = await requireAuth()
+  if (!auth.ok) return auth.response
   const supabaseAdmin = getSupabaseAdmin()
   try {
     const body = await req.json()

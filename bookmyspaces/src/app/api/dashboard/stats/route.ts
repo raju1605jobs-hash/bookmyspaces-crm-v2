@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
 import { DashboardSummary } from '@/modules/leads/types';
+import { requireAuth } from '@/lib/auth-guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +27,8 @@ interface LeadStatsRow {
 }
 
 export async function GET(): Promise<NextResponse> {
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.response;
   try {
     const db = getSupabaseAdmin();
 

@@ -1,0 +1,5 @@
+folder,file,loc
+src/components/auth,UserMenu.tsx,145
+src/components/chatbot,ChatWidget.tsx,223
+src/components/layout,CRMLayout.tsx,56
+src/components/layout,CRMShell.tsx,195

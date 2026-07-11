@@ -1,0 +1,2 @@
+file,loc,in_src_components,useState_count,useEffect_count,useCallback_count,useMemo_count,useRef_count,internal_function_components,default_export,god_component_flag
+src/app/(crm)/dashboard/HotLeadDashboard.tsx,932,NO (colocated in src/app/(crm)/dashboard/),4,2,1,0,0,16,"SalesOperationsDashboard (line 615)",YES - only file in the repo exceeding 400 LOC that renders UI; defines 16 sub-components inline rather than splitting into src/components/

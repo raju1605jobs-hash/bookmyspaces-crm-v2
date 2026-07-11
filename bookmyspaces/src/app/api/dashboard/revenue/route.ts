@@ -6,6 +6,7 @@
 
 import { NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase';
+import { requireAuth } from '@/lib/auth-guard';
 
 export const dynamic = 'force-dynamic';
 
@@ -72,6 +73,8 @@ export interface RevenueSummary {
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
 export async function GET(): Promise<NextResponse> {
+  const auth = await requireAuth();
+  if (!auth.ok) return auth.response;
   try {
     const db  = getSupabaseAdmin();
     const now = new Date();

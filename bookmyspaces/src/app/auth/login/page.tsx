@@ -9,12 +9,19 @@ function LoginContent() {
   const router      = useRouter()
   const params      = useSearchParams()
   const redirect    = params.get('redirect') ?? '/dashboard'
+  // ISS-028: surface a real message when the OAuth/magic-link callback (src/lib/auth-callback.ts)
+  // redirects here after a failed code exchange, instead of silently dropping the ?error= param.
+  const callbackError = params.get('error')
 
   const [email,    setEmail]    = useState('')
   const [password, setPassword] = useState('')
   const [showPw,   setShowPw]   = useState(false)
   const [loading,  setLoading]  = useState(false)
-  const [error,    setError]    = useState<string | null>(null)
+  const [error,    setError]    = useState<string | null>(
+    callbackError === 'callback_failed'
+      ? 'Your sign-in link expired or was already used. Please sign in again.'
+      : null
+  )
 
   const handleLogin = useCallback(async (e: React.FormEvent) => {
     e.preventDefault()

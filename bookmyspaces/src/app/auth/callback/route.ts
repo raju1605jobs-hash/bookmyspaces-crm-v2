@@ -1,44 +1,11 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
-import type { CookieItem } from '@/lib/supabase-types';
+// src/app/auth/callback/route.ts
+// Handles Supabase auth callback (OAuth, magic links, email confirmation).
+// ISS-027: logic now lives in src/lib/auth-callback.ts (shared with src/app/api/auth/callback/route.ts)
+// so both callback URL paths behave identically instead of diverging. This file
+// previously reimplemented its own inline cookie handling and redirected failures to
+// the nonexistent /auth/auth-code-error page (ISS-028) — both are now fixed by delegating
+// to the shared handler.
 
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  const { searchParams, origin } = new URL(request.url);
-  const code = searchParams.get('code');
-  const next = searchParams.get('next') ?? '/';
+export const dynamic = 'force-dynamic'
 
-  if (!code) {
-    return NextResponse.redirect(`${origin}/auth/auth-code-error`);
-  }
-
-  const response = NextResponse.redirect(`${origin}${next}`);
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll(): CookieItem[] {
-          return request.cookies.getAll().map((c) => ({
-            name: c.name,
-            value: c.value,
-          }));
-        },
-        setAll(cookiesToSet: CookieItem[]): void {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set(name, value);
-            response.cookies.set(name, value, options);
-          });
-        },
-      },
-    }
-  );
-
-  const { error } = await supabase.auth.exchangeCodeForSession(code);
-
-  if (error) {
-    return NextResponse.redirect(`${origin}/auth/auth-code-error`);
-  }
-
-  return response;
-}
+export { handleAuthCallback as GET } from '@/lib/auth-callback'
