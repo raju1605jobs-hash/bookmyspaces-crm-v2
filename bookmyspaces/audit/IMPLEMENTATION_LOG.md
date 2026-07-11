@@ -286,3 +286,21 @@ git push origin --force --tags
 **Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean, same pre-existing unrelated warning), `npx vitest run` (11/11 passing), `vercel.json` re-validated as parseable JSON after reconstruction.
 
 ---
+
+## ISS-034 (partial), ISS-037, ISS-038, ISS-029: security headers + env var cleanup
+
+**ISS-034 (partial — safe subset only):** Added `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and a restrictive `Permissions-Policy` to every route in `next.config.js`. Deliberately did NOT add a Content-Security-Policy header — the audit itself flags CSP as needing a full manual click-through test in a real browser before shipping (it can silently break inline scripts/styles/third-party embeds if mistuned), which isn't possible from this sandbox. Verified via `tsc`/`next lint`/`vitest`/two full `npm run build` runs by the user, both "Compiled successfully."
+
+**ISS-037 (real bug, not just docs):** Found that `src/app/api/auth/logout/route.ts` read `process.env.NEXT_PUBLIC_SITE_URL`, a variable name that doesn't exist anywhere in `.env.example` and — confirmed by checking the real `.env.local` — is NOT set in production either. That means every logout redirect was silently falling back to `http://localhost:3000` instead of the real site. Fixed by switching that file to read `NEXT_PUBLIC_APP_URL` instead, the name every other file (e.g. `proposals/email/route.ts`) already uses and the one actually documented/set. This is a real functional fix, not just a naming cleanup.
+
+**ISS-038/ISS-029:** Removed `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `WATI_VERIFY_TOKEN`, `WATI_WEBHOOK_SECRET`, `NEXT_PUBLIC_BUSINESS_PHONE` from `.env.example` — confirmed via project-wide grep (`.ts`/`.tsx`/`.js`/`.jsx`) that none of these are read anywhere in the code. Kept `WATI_BASE_URL`/`WATI_API_TOKEN` documented (with a note on scope) since those two ARE still read, by `src/app/api/health/route.ts` and `src/lib/transcription.ts`.
+
+**Files changed:** `next.config.js`, `src/app/api/auth/logout/route.ts`, `.env.example`.
+
+**Incident:** `next.config.js` and `src/app/api/auth/logout/route.ts` were both truncated mid-edit by the Edit tool again (same recurring bug), caught immediately (`next build` failed to even load the config; `tsc` would have caught the route file). Both reconstructed via the heredoc-to-/tmp-then-cp pattern and re-verified.
+
+**Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean, same pre-existing warning), `npx vitest run` (11/11 passing), two full `npm run build` runs on the user's own machine — both "Compiled successfully" with all routes listed.
+
+**Not yet done:** ISS-036 (fully centralized env var startup validation, i.e. one file that checks all required vars are set and fails fast with a clear message) — this session only fixed the mismatch/dead-var issues (ISS-037/038/029); building a proper centralized validator is a slightly bigger, separate piece of work still on the list.
+
+---
