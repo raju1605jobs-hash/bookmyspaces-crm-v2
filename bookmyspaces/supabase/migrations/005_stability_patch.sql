@@ -85,10 +85,21 @@ CREATE POLICY "leads_anon_insert" ON leads
 -- conversations: service role + anon chatbot access
 CREATE POLICY "conversations_service_role_all" ON conversations
   FOR ALL USING (auth.role() = 'service_role');
-CREATE POLICY "conversations_anon_insert" ON conversations
-  FOR INSERT WITH CHECK (TRUE);
-CREATE POLICY "conversations_anon_update" ON conversations
-  FOR UPDATE USING (TRUE);
+-- ISS-008 (audit/MASTER_ISSUE_REGISTER.csv): the two anon policies below are
+-- STALE — confirmed absent from the live production policy list during the
+-- Phase 0 schema reconciliation (see audit/MIGRATION_REVIEW.md, statement
+-- #17, and the defensive DROP POLICY statements for these exact two names in
+-- supabase/migrations/009_document_undocumented_production_objects.sql).
+-- They were removed live at some point without this source file being
+-- updated to match, so re-running this file against a fresh database used to
+-- recreate access production no longer grants. Commented out (not deleted)
+-- so the migration history stays legible; matches ISS-001/002's tightened
+-- posture of requiring a real session for conversation writes instead of
+-- open anon INSERT/UPDATE.
+-- CREATE POLICY "conversations_anon_insert" ON conversations
+--   FOR INSERT WITH CHECK (TRUE);
+-- CREATE POLICY "conversations_anon_update" ON conversations
+--   FOR UPDATE USING (TRUE);
 
 -- knowledge_chunks
 CREATE POLICY "knowledge_chunks_service_role_all" ON knowledge_chunks

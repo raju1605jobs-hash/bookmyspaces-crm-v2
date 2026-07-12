@@ -6,11 +6,15 @@
 // dead). Restored under the correct App Router filename. leads.lead_stage is confirmed
 // present on the live database (audit/SCHEMA_DRIFT_REPORT.md, Category C) so this is
 // safe to activate now — no pending migration required.
+//
+// ISS-005: body now validated with leadStageBodySchema (src/lib/validation.ts)
+// before the hand-rolled isValidStage() check — gives a consistent {error,
+// issues[]} 400 shape instead of the route's own ad-hoc error object.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { transitionStage } from '@/modules/leads/lead-stage-manager';
-import { isValidStage } from '@/modules/leads/lead-stage-manager';
 import { requireAuth } from '@/lib/auth-guard';
+import { parseBody, leadStageBodySchema } from '@/lib/validation';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,15 +30,9 @@ export async function PATCH(
       return NextResponse.json({ error: 'Lead ID required' }, { status: 400 });
     }
 
-    const body = await req.json() as { stage?: string; reason?: string; force?: boolean };
-    const { stage, reason, force = false } = body;
-
-    if (!stage || !isValidStage(stage)) {
-      return NextResponse.json(
-        { error: 'Invalid stage value', valid_stages: ['NEW','CONTACTED','QUALIFIED','NEGOTIATING','PROPOSAL_SENT','VISIT_SCHEDULED','CONFIRMED','LOST'] },
-        { status: 400 }
-      );
-    }
+    const parsed = await parseBody(req, leadStageBodySchema);
+    if (!parsed.ok) return parsed.response;
+    const { stage, reason, force = false } = parsed.data;
 
     const result = await transitionStage({
       leadId,

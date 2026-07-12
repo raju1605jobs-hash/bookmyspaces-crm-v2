@@ -6,6 +6,7 @@ import { logger } from '@/lib/logger'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets } from '@/lib/sheets'
 import { requireAuth } from '@/lib/auth-guard'
+import { parseBody, createLeadSchema, updateLeadSchema } from '@/lib/validation'
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth()
@@ -38,13 +39,20 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const auth = await requireAuth()
   if (!auth.ok) return auth.response
+
+  // ISS-005: validated with createLeadSchema before touching the database —
+  // previously any shape was accepted and bad types (e.g. a non-numeric
+  // guest_count) surfaced as an opaque Postgres error instead of a clear 400.
+  const parsed = await parseBody(req, createLeadSchema)
+  if (!parsed.ok) return parsed.response
+  const body = parsed.data
+
   const supabaseAdmin = getSupabaseAdmin()
   try {
-    const body = await req.json()
     const { data: lead, error } = await supabaseAdmin.from('leads').insert({
       name: body.name || null, phone: body.phone || null, email: body.email || null,
       event_type: body.event_type || null, event_date: body.event_date || null,
-      guest_count: body.guest_count ? parseInt(body.guest_count) : null,
+      guest_count: body.guest_count ? parseInt(String(body.guest_count)) : null,
       budget: body.budget || null, special_requirements: body.special_requirements || null,
       venue: body.venue || null, source: body.source || 'website',
       status: body.status || 'new_inquiry', assigned_to: body.assigned_to || null, notes: body.notes || null,
@@ -64,12 +72,19 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const auth = await requireAuth()
   if (!auth.ok) return auth.response
+
+  // ISS-005: updateLeadSchema is a strict allow-list — this closes a mass-
+  // assignment gap where the old `const { id, ...updates } = body` pattern
+  // would forward ANY field straight into `.update()`, including columns the
+  // UI never exposes (ai_score, created_at, etc.) or lead_stage, which has
+  // its own validated transition path at /api/leads/[id]/stage and must not
+  // be bypassed here.
+  const parsed = await parseBody(req, updateLeadSchema)
+  if (!parsed.ok) return parsed.response
+  const { id, ...updates } = parsed.data
+
   const supabaseAdmin = getSupabaseAdmin()
   try {
-    const body = await req.json()
-    const { id, ...updates } = body
-    if (!id) return NextResponse.json({ error: 'Lead ID required' }, { status: 400 })
-
     const { data: lead, error } = await supabaseAdmin.from('leads').update(updates).eq('id', id).select('*').single()
     if (error) throw error
 

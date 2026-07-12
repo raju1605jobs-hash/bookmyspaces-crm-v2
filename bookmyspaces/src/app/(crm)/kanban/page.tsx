@@ -6,17 +6,52 @@ import {
   Brain, FileText, Sparkles, Clock, AlarmClock,
 } from 'lucide-react'
 import { format, parseISO } from 'date-fns'
+import { LEAD_STAGES, VALID_TRANSITIONS, type LeadStage } from '@/modules/leads/types'
 
 // ─── Pipeline config ──────────────────────────────────────────────────────────
+// ISS-KANBAN-001: previously kept its own 6-column pipeline keyed off the legacy
+// `status` column (new_inquiry/followup_pending/proposal_sent/negotiation/
+// confirmed/future_prospect), written via PATCH /api/leads. The Dashboard
+// (HotLeadDashboard.tsx) tracks the SAME pipeline via a separate `lead_stage`
+// column (NEW/CONTACTED/.../LOST), written via the validated PATCH
+// /api/leads/[id]/stage → transitionStage() path. The two never synced: dragging
+// a card here didn't move it on the Dashboard and vice versa. Standardized on
+// lead_stage (the richer, transition-validated model) as the single source of
+// truth; this board now reads/writes it exclusively.
 
-const PIPELINE: Array<{ status: string; label: string; color: string; bg: string }> = [
-  { status: 'new_inquiry',      label: 'New Inquiry',     color: '#2563eb', bg: '#eff6ff' },
-  { status: 'followup_pending', label: 'Follow-up',       color: '#d97706', bg: '#fffbeb' },
-  { status: 'proposal_sent',    label: 'Proposal Sent',   color: '#7c3aed', bg: '#f5f3ff' },
-  { status: 'negotiation',      label: 'Negotiation',     color: '#ea580c', bg: '#fff7ed' },
-  { status: 'confirmed',        label: 'Confirmed ✓',     color: '#16a34a', bg: '#f0fdf4' },
-  { status: 'future_prospect',  label: 'Future Prospect', color: '#4b5563', bg: '#f9fafb' },
+const STAGE_PIPELINE: Array<{ stage: LeadStage; label: string; color: string; bg: string }> = [
+  { stage: 'NEW',             label: 'New Inquiry',    color: '#2563eb', bg: '#eff6ff' },
+  { stage: 'CONTACTED',       label: 'Contacted',      color: '#0891b2', bg: '#ecfeff' },
+  { stage: 'QUALIFIED',       label: 'Qualified',      color: '#4f46e5', bg: '#eef2ff' },
+  { stage: 'NEGOTIATING',     label: 'Negotiation',    color: '#ea580c', bg: '#fff7ed' },
+  { stage: 'PROPOSAL_SENT',   label: 'Proposal Sent',  color: '#7c3aed', bg: '#f5f3ff' },
+  { stage: 'VISIT_SCHEDULED', label: 'Visit Scheduled',color: '#d97706', bg: '#fffbeb' },
+  { stage: 'CONFIRMED',       label: 'Confirmed ✓',    color: '#16a34a', bg: '#f0fdf4' },
+  { stage: 'LOST',            label: 'Lost',           color: '#4b5563', bg: '#f9fafb' },
 ]
+
+// Bootstrap mapping for leads not yet migrated to lead_stage (mirrors the
+// server-side fallback in lead-stage-manager.ts autoAdvanceStage) — used only
+// to decide which column to *display* an unmigrated lead in, never written
+// back implicitly. The lead is only actually written to lead_stage once the
+// user explicitly drags/moves it.
+const STATUS_TO_STAGE: Record<string, LeadStage> = {
+  new_inquiry     : 'NEW',
+  new             : 'NEW',
+  followup_pending: 'CONTACTED',
+  proposal_sent   : 'PROPOSAL_SENT',
+  negotiation     : 'NEGOTIATING',
+  confirmed       : 'CONFIRMED',
+  rejected        : 'LOST',
+  future_prospect : 'NEW',
+}
+
+function effectiveStage(lead: any): LeadStage {
+  if (lead.lead_stage && (LEAD_STAGES as readonly string[]).includes(lead.lead_stage)) {
+    return lead.lead_stage as LeadStage
+  }
+  return STATUS_TO_STAGE[lead.status] ?? 'NEW'
+}
 
 // ─── Timezone helper ──────────────────────────────────────────────────────────
 // Converts a UTC ISO string to the YYYY-MM-DDTHH:mm format required by
@@ -41,6 +76,7 @@ export default function KanbanPage() {
   const [isGeneratingSummary, setIsGeneratingSummary] = useState(false)
   const [isScoringAll,        setIsScoringAll]        = useState(false)
   const [scoreResult,         setScoreResult]         = useState<string | null>(null)
+  const [stageError,          setStageError]          = useState<string | null>(null)
 
   // ── Data fetching ────────────────────────────────────────────────────────
 
@@ -62,13 +98,24 @@ export default function KanbanPage() {
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
-  const updateStatus = async (id: string, status: string) => {
-    setLeads(prev => prev.map(l => l.id === id ? { ...l, status } : l))
-    await fetch('/api/leads', {
-      method : 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body   : JSON.stringify({ id, status }),
-    })
+  const updateStage = async (id: string, stage: LeadStage) => {
+    const prevLeads = leads
+    setLeads(prev => prev.map(l => l.id === id ? { ...l, lead_stage: stage } : l))
+    try {
+      const res = await fetch(`/api/leads/${id}/stage`, {
+        method : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body   : JSON.stringify({ stage, reason: 'kanban drag-and-drop' }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({} as any))
+        setLeads(prevLeads) // revert optimistic move — transition was rejected
+        setStageError(data.error || `Could not move lead to ${stage}`)
+      }
+    } catch {
+      setLeads(prevLeads)
+      setStageError('Network error while updating stage')
+    }
   }
 
   const scoreAllLeads = async () => {
@@ -92,14 +139,14 @@ export default function KanbanPage() {
 
   // ── Drag & drop ──────────────────────────────────────────────────────────
 
-  const leadsByStatus = (status: string) =>
+  const leadsByStage = (stage: LeadStage) =>
     leads
-      .filter(l => l.status === status)
+      .filter(l => effectiveStage(l) === stage)
       .sort((a, b) => (b.ai_score || b.lead_score || 5) - (a.ai_score || a.lead_score || 5))
 
   const handleDragOver  = (e: React.DragEvent) => e.preventDefault()
-  const handleDrop      = (status: string) => {
-    if (draggedId) updateStatus(draggedId, status)
+  const handleDrop      = (stage: LeadStage) => {
+    if (draggedId) updateStage(draggedId, stage)
     setDraggedId(null)
   }
 
@@ -182,18 +229,29 @@ export default function KanbanPage() {
         </div>
       )}
 
+      {/* ── Stage error toast ── */}
+      {stageError && (
+        <div
+          className="mx-6 mt-4 px-4 py-2 rounded-lg text-sm flex items-center justify-between gap-3"
+          style={{ background: '#fef2f2', color: '#dc2626', border: '1px solid #fca5a5' }}
+        >
+          <span>⚠️ {stageError}</span>
+          <button onClick={() => setStageError(null)} className="text-xs underline flex-shrink-0">Dismiss</button>
+        </div>
+      )}
+
       {/* ── Kanban board ── */}
       <div className="p-6 overflow-x-auto">
         <div className="flex gap-4 min-w-max">
-          {PIPELINE.map(col => {
-            const colLeads = leadsByStatus(col.status)
+          {STAGE_PIPELINE.map(col => {
+            const colLeads = leadsByStage(col.stage)
             return (
               <div
-                key={col.status}
+                key={col.stage}
                 className="w-72 flex-shrink-0 rounded-2xl overflow-hidden"
                 style={{ background: 'white', border: '1px solid var(--border)' }}
                 onDragOver={handleDragOver}
-                onDrop={() => handleDrop(col.status)}
+                onDrop={() => handleDrop(col.stage)}
               >
                 {/* Column header */}
                 <div
@@ -345,17 +403,19 @@ export default function KanbanPage() {
                   Create Proposal
                 </a>
 
-                {/* Stage quick-move buttons */}
+                {/* Stage quick-move buttons — only shows stages the state machine
+                    actually allows next (VALID_TRANSITIONS in modules/leads/types.ts),
+                    so these buttons never trigger the same rejection a free drag might. */}
                 <div className="flex gap-2">
-                  {PIPELINE
-                    .filter(p => p.status !== selectedLead.status)
+                  {STAGE_PIPELINE
+                    .filter(p => VALID_TRANSITIONS[effectiveStage(selectedLead)]?.includes(p.stage))
                     .slice(0, 2)
                     .map(p => (
                       <button
-                        key={p.status}
+                        key={p.stage}
                         onClick={() => {
-                          updateStatus(selectedLead.id, p.status)
-                          setSelectedLead({ ...selectedLead, status: p.status })
+                          updateStage(selectedLead.id, p.stage)
+                          setSelectedLead({ ...selectedLead, lead_stage: p.stage })
                         }}
                         className="flex-1 py-2 rounded-lg text-xs font-medium"
                         style={{ background: p.bg, color: p.color, border: `1px solid ${p.color}30` }}

@@ -69,3 +69,19 @@ Two genuine external-input stop conditions remain, per the mission's own rules:
 2. **Git history push** needs the user's own GitHub credentials (no push auth available in this sandbox).
 
 Phase 2 authentication (ISS-001/002/003/004/033) and the OAuth callback consolidation (ISS-027/028) and escalation engine wiring (ISS-017) are now all complete — see COMPLETED_ISSUES.md and CURRENT_STATUS.md. Manual click-through verification of login/logout/redirect flows against a live Supabase instance is still recommended before deploying, since this sandbox has no network path to Supabase.
+
+---
+
+## 2026-07-12 session update
+
+Resolved this session (see COMPLETED_ISSUES.md and IMPLEMENTATION_LOG.md for full detail): ISS-026, ISS-029, ISS-034 (confirmed already done), ISS-036, ISS-050, ISS-037 (remaining gap only), ISS-038, ISS-008, ISS-005 (partial — 3 of 31 routes).
+
+New finding, not a numbered issue yet: Kanban board and Dashboard tracked lead pipeline stage via two different, unsynced DB columns (`status` vs `lead_stage`) — fixed, see IMPLEMENTATION_LOG.md.
+
+Security gap surfaced by the ISS-038 cleanup: `CRON_SECRET` and `WHATSAPP_APP_SECRET` are both correctly read by live code but were missing from `.env.local` — both routes fail open (unauthenticated) when their secret is unset, by design, so this is a real exposure right now, not a bug. `CRON_SECRET` generated and added to `.env.local`; still needs to be set in Vercel's environment variables to protect the deployed cron endpoints. `WHATSAPP_APP_SECRET` cannot be generated — must be the real value from the Meta for Developers dashboard.
+
+Anomaly flagged, unresolved: this working copy has no `.git` directory at all, despite CURRENT_STATUS.md describing a branch/tags/history-rewrite that should exist here. Needs the user's attention directly — not something to guess at from within a sandbox.
+
+**Remaining Ready items, unchanged:** ISS-041 (blocked on external SMTP — actually already resolved per COMPLETED_ISSUES.md row 26, this line is stale and should be removed on a future pass).
+
+**ISS-005 follow-up:** the zod validation pattern (`src/lib/validation.ts`) is established and unit-tested; extending it to the remaining ~28 routes is now mechanical — each route needs a schema for its actual body shape, defined by whoever can verify that shape against real usage (ideally with live testing available, not blind from a sandbox).

@@ -394,3 +394,65 @@ git push origin --force --tags
 **Status:** ISS-041 (real proposal email sending) is now fully verified working end-to-end, including the underlying auth fix that was blocking it.
 
 ---
+
+---
+
+## 2026-07-12 — New session: sandbox has no live network access; scoped to code audit + remediation roadmap
+
+**Context:** User asked for full end-to-end production QA + autonomous fixes across 10 workflows (lead management, kanban, proposals, customers, payments, invoices, dashboard, analytics, campaigns, AI chat, WhatsApp, user management/settings), expecting the same browser/computer-use capability a prior session had used for the live testing documented above (auth cookie bug, proposal creation, email sending).
+
+**Capability check performed:** `list_connected_browsers` returned empty — no Claude in Chrome extension connected this session. Direct `curl` tests from the sandbox to both the Supabase project URL and the production Vercel URL (`bookmyspaces-crm-v2.vercel.app`, found in `PROJECT_ACCESS.md`) both failed instantly (connection refused) — this sandbox's network is allowlisted to a small set of domains that does not include either. `npm run dev` was confirmed to hang indefinitely as a result (every route touches Supabase). This matches every prior "not yet done — no network egress to Supabase" note already in this file; it is a property of the sandbox, not something that changed session to session.
+
+**Decision (user confirmed):** continue the existing remediation roadmap via code audit + static verification (tsc/lint/vitest), rather than re-attempt live testing this session can't actually do. Live click-through of the still-untested workflows below remains the recommended next step whenever browser/computer-use access is available again.
+
+### New bug found and fixed: Kanban board and Dashboard tracked lead pipeline stage via two different, unsynced database columns
+
+**Problem:** `src/app/(crm)/kanban/page.tsx` read/wrote the legacy `status` column (`new_inquiry`/`followup_pending`/`proposal_sent`/`negotiation`/`confirmed`/`future_prospect`) via `PATCH /api/leads`. `src/app/(crm)/dashboard/HotLeadDashboard.tsx`'s stage dropdown read/wrote the newer `lead_stage` column (`NEW`/`CONTACTED`/.../`LOST`) via the validated `PATCH /api/leads/[id]/stage` → `transitionStage()` path (the same route restored under ISS-020 above). Neither view updated the other's column — dragging a card on the Kanban board silently did not move it in the Dashboard's stage view, and vice versa. Not found by the live testing documented above, since that testing covered proposal creation/email, not kanban or the lead dashboard.
+
+**Fix:** Standardized the Kanban board on `lead_stage` (the richer, transition-validated model) as sole source of truth. Rewrote its pipeline to the 8 `LEAD_STAGES`, drag-and-drop and the detail panel's quick-move buttons now call `PATCH /api/leads/[id]/stage`, with an `effectiveStage()` fallback that displays (never silently writes) a derived stage for any lead not yet migrated to `lead_stage`, mirroring the same bootstrap map already used server-side in `autoAdvanceStage()`. Rejected transitions (the state machine in `modules/leads/types.ts` restricts which stage-to-stage moves are valid) now revert the optimistic UI move and show a dismissible error toast, instead of the previous code's silent no-op on failure.
+
+**Files changed:** `src/app/(crm)/kanban/page.tsx`.
+
+**Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean, same pre-existing warning), `npx vitest run` (11/11 passing). Could not live-test the drag-and-drop interaction itself (no browser access this session) — recommend as the first thing to click-test whenever access is available.
+
+**Tooling note (reproduced the file-truncation bug from earlier sessions):** the Edit tool truncated `kanban/page.tsx` mid-string on the first attempt (confirmed via the same host-view-vs-sandbox-view discrepancy this file already documents — Read tool showed a complete file, `wc -l`/`tsc` in the shell tool saw a shorter, truncated one). Fixed via the same heredoc-to-/tmp-then-cp pattern, verified with `wc -l`/`tail -c` before copying into place. Also hit on `middleware.ts` (a much smaller file) during this session — same fix pattern. This continues to be the single most reliable failure mode on this mount; every file write this session was independently verified in the shell tool, not just trusted from the Edit/Write tool's own success message.
+
+### ISS-026 — confirmed and closed
+
+Root-level `middleware.ts` (an inert placeholder stub — its "auth logic" was literally commented out as an example) is not compiled by Next.js at all; confirmed via `.next/server/middleware-manifest.json` after a local build, which shows `"name": "src/middleware"` as the only registered middleware. Left in place (deletion blocked by sandbox permissions, same as ISS-013/021/022) but given a loud header comment so a future developer doesn't mistake it for live code and "fix" auth there.
+
+### ISS-029/037/038 — env var cleanup
+
+Confirmed via grep (zero references in `src/`) that `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `NEXTAUTH_SECRET`, and `NEXT_PUBLIC_BUSINESS_PHONE` are genuinely unused. Commented out (values preserved, not deleted) in both `.env.local` and `.env.example` with explanations.
+
+**New finding, more important than the cleanup itself:** `CRON_SECRET` and `WHATSAPP_APP_SECRET` are both correctly documented in `.env.example` and read by live code (`cron/followups`, `cron/escalations`, `whatsapp/webhook`), but were **missing from `.env.local`** — the file the running app actually reads. Both routes are deliberately fail-open by design when their secret is unset (logs a warning, does not reject), which is safe-by-design but means, in practice, both are running completely unauthenticated on production right now. Generated a random `CRON_SECRET` and added it to `.env.local` — user still needs to set the identical value as a Vercel project environment variable for it to actually gate the deployed cron endpoints. `WHATSAPP_APP_SECRET` was **not** invented — it must be the app's real secret from the Meta for Developers dashboard; using a fake value would break real signature verification rather than fix anything.
+
+### ISS-034 — already done, doc was stale
+
+`next.config.js` already has `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, with a clear existing comment on why CSP is deliberately deferred pending a manual browser test. No action needed; `OPEN_ISSUES.md` just hadn't caught up to this already-completed work.
+
+### ISS-036/050 — centralized env var validation (new)
+
+Added `src/lib/env.ts` (zod-validated required vars: Supabase URL/anon key/service role key, Anthropic key; grouped warnings for optional vars by the feature they'd disable) and `src/instrumentation.ts` (Next.js's stable startup hook, calls `assertEnv()` once when the server boots, Node.js runtime only). Could not run a full `npm run build` in this sandbox to observe the actual startup log (consistently exceeds this session's 45-second tool-call ceiling) — recommend the user run `npm run build && npm start` once and confirm the `[env]` log line appears as expected.
+
+### ISS-008 — stale migration file
+
+`supabase/migrations/005_stability_patch.sql` created `conversations_anon_insert`/`conversations_anon_update` RLS policies (open, unauthenticated INSERT/UPDATE on `conversations`). Migration 009's already-completed live-schema audit confirmed both are absent from production today (dropped at some point without the source migration being updated to match) — see its own defensive `DROP POLICY IF EXISTS` statements for these exact two names. Commented out in 005 (not deleted) with a full explanation, so the migration history stays legible but a fresh-database run no longer recreates access production doesn't actually grant. `leads_anon_insert` (a third, similarly-named policy in the same file) was deliberately left untouched — migration 009's authoritative drop list does not include it, so there's no verified evidence it's stale; flagging it would be new speculation, not a confirmed finding.
+
+### ISS-005 — zod input validation (partial, scoped rollout)
+
+Added `src/lib/validation.ts` (shared `parseBody()` helper + zod schemas) and `src/lib/validation.test.ts` (13 new unit tests, all passing — the one piece of this session's work that could be verified by actually running it, since it has no Supabase dependency). Applied to the 3 highest-write-risk routes this session's QA scope covered: `POST /api/leads`, `PATCH /api/leads`, `PATCH /api/leads/[id]/stage`.
+
+**Real bug found in the process:** `PATCH /api/leads`'s old `const { id, ...updates } = body` pattern forwarded any field straight into Supabase's `.update()` — a mass-assignment gap. A caller could set `ai_score`, `created_at`, or (most importantly) `lead_stage` directly, bypassing the validated `transitionStage()` state machine entirely. The new schema is a strict allow-list; anything outside it is rejected with a 400, not silently dropped.
+
+**Deliberately not done:** the remaining ~28 of 31 routes are NOT covered — applying zod blind to routes this session didn't individually verify the real expected shape of would risk breaking something without a way to catch it (no live testing available). Listed as ready follow-up work, not claimed complete.
+
+**Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean), `npx vitest run` (24/24 passing, up from 11).
+
+### Anomaly flagged, not resolved: git history missing from this working copy
+
+`CURRENT_STATUS.md` (this file, prior entries) describes a `remediation/phase-0-audit-followup` branch, safety tags, and a `git-filter-repo` history rewrite that stripped exposed customer PII from every commit. This working copy (`C:\rajubmp\bookmyspaces`, as mounted this session) has **no `.git` directory at all** — only `.gitignore`. Not investigated further this session (git recovery is destructive-adjacent territory and genuinely the user's call, not something to guess at). Flagged to the user directly in chat; needs the user's own attention before more changes accumulate with no version-control safety net.
+
+**Files changed this session, full list:** `src/app/(crm)/kanban/page.tsx`, `middleware.ts`, `.env.local`, `.env.example`, `supabase/migrations/005_stability_patch.sql`, `src/lib/env.ts` (new), `src/instrumentation.ts` (new), `src/lib/validation.ts` (new), `src/lib/validation.test.ts` (new), `src/app/api/leads/route.ts`, `src/app/api/leads/[id]/stage/route.ts`.
+
+**Stray file not cleaned up:** `src/app/(crm)/kanban/page.tsx.bak-preIss` — a backup made before the truncation-bug fix, deletion blocked by sandbox permissions like ISS-013/021/022. Flagged for the user to `rm` directly.
