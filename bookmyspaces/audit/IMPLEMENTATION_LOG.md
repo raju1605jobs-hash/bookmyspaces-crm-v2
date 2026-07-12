@@ -304,3 +304,55 @@ git push origin --force --tags
 **Not yet done:** ISS-036 (fully centralized env var startup validation, i.e. one file that checks all required vars are set and fails fast with a clear message) — this session only fixed the mismatch/dead-var issues (ISS-037/038/029); building a proper centralized validator is a slightly bigger, separate piece of work still on the list.
 
 ---
+
+## NEW FINDING (via manual click-through, not in original audit register): missing sign-out button
+
+**Problem:** While manually testing the Phase 2 authentication changes (login/logout) in a real browser at the user's request, discovered there was no way to log out of the CRM at all. `src/app/(crm)/layout.tsx` uses `CRMLayout.tsx`, a bare-bones sidebar layout with no header and no sign-out control anywhere. A second, more polished layout component, `CRMShell.tsx`, does have a "Sign out" button — but it is never imported/used anywhere in the app (dead code), and even if it were wired in, its sign-out button posts to `/api/auth/signout`, a URL that doesn't exist (the real, working route is `/api/auth/logout`, confirmed and fixed for ISS-037 earlier this session).
+
+**Fix:** Added a working "Sign out" button directly to `CRMLayout.tsx` (the layout actually in use), as a simple form posting to the real `/api/auth/logout` route. Chose this over swapping in `CRMShell.tsx` wholesale, to avoid a much larger visual/behavioral change to every page in the app from a single small bug fix. `CRMShell.tsx` and the unused `login`/`logout` server actions in `src/app/actions/auth.ts` (which redirect to `/login` and `/error`, neither of which exist) remain as known dead code for a future cleanup pass — not touched in this fix to keep the change small.
+
+**Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean, same pre-existing warning), `npx vitest run` (11/11 passing), `npm run build` on the user's machine (twice — before and after a dev-server restart needed to pick up the change), and a full manual browser test by the user: logged in with real Supabase credentials, clicked the new "Sign out" button, confirmed it correctly lands back on the login page.
+
+**Why this matters beyond the immediate fix:** this is exactly the kind of bug that `tsc`/`lint`/`vitest`/`next build` cannot catch — nothing was type-incorrect or untested at the unit level, the button simply didn't exist in the UI a real user sees. This validates the manual click-through step the audit called for after the Phase 2 auth changes, and it found a real, previously-undocumented issue.
+
+**Files changed:** `src/components/layout/CRMLayout.tsx`.
+
+---
+
+## Migration 009 applied to production by the user
+
+**What happened:** The user ran `supabase/migrations/009_document_undocumented_production_objects.sql` directly in the Supabase SQL Editor (Authentication/database dashboard, not from this sandbox — no live DB network access here). Result: "Success. No rows returned" — the expected, correct result for a migration made entirely of DDL statements (CREATE TABLE/INDEX/POLICY, ALTER TABLE, CREATE OR REPLACE VIEW), with no errors.
+
+**What this unblocks:** Per CURRENT_STATUS.md, this was the last remaining blocker for ISS-006 (RLS policies now exist on `analytics_events`/`follow_ups`, previously RLS-enabled with zero policies), ISS-009/ISS-010 (schema now documented in version control matching live), ISS-015/ISS-018 (the WhatsApp subsystem and follow-up engine both needed schema pieces this migration adds — `follow_ups.trigger_reason` in particular for ISS-018).
+
+**Not yet done:** the 4 database functions this migration's triggers depend on (`assign_invoice_number`, `assign_receipt_number`, `sync_proposal_payment_status`, `update_updated_at`) were deliberately NOT redefined in migration 009 (see the migration's own header comment) — they already exist live and were left untouched rather than guessed at. A follow-up migration to capture their real source into version control is still open, low-priority (production is unaffected either way — the functions already exist and work).
+
+---
+
+## New feature: real email sending system (ISS-041 fix + proposal/invoice/payment/follow-up/booking-confirmation emails)
+
+**Requested by user:** after prioritizing "proper proposal and WhatsApp integration, and running campaigns," the user asked specifically to replace the mailto:-only proposal email (ISS-041) with real server-side sending, provider-agnostic, with reusable templates, delivery logging, and support for 5 email types: proposal, invoice, payment reminder, follow-up, booking confirmation. Chose Resend as the provider after asking the user directly (options offered: Resend, SendGrid, existing business SMTP, or "pick one for me" — user chose Resend).
+
+**Architecture (new files):**
+- `supabase/migrations/011_email_log.sql` (new) — additive migration, one new table `email_log` (recipient, subject, template_type, related_entity_type/id, provider, provider_message_id, status, error_message, metadata, sent_at) with indexes and a service-role-only RLS policy, matching the project's existing convention. User still needs to run this in the Supabase SQL Editor (see below).
+- `src/lib/email/provider.ts` (new) — `sendEmail()` talks to Resend's REST API via plain `fetch` (no new npm dependency). Deliberately provider-agnostic: nothing outside this file knows it's Resend specifically, so swapping providers later is a one-function change. `isEmailProviderConfigured()` checks `RESEND_API_KEY`.
+- `src/lib/email/templates.ts` (new) — 5 pure functions (`proposalEmail`, `invoiceEmail`, `paymentReminderEmail`, `followUpEmail`, `bookingConfirmationEmail`), each returning `{ subject, html, text }`. Shared HTML wrapper for consistent branding. No DB or network calls — easy to unit test later.
+- `src/lib/email/send.ts` (new) — `sendProposalEmail`/`sendInvoiceEmail`/`sendPaymentReminderEmail`/`sendFollowUpEmail`/`sendBookingConfirmationEmail`. Each renders the template, calls the provider, and **always** logs the attempt (success or failure) to `email_log` — this is the one place that guarantees logging, so no caller can forget it (learned from the ISS-042 unawaited-write incident earlier this session — this write is awaited).
+
+**Routes wired up:**
+- `src/app/api/proposals/email/route.ts` — rewritten to call `sendProposalEmail()` for real. If `RESEND_API_KEY` isn't set, falls back to the exact same mailto: behavior as before (graceful degradation, matches the `WHATSAPP_APP_SECRET` fail-open pattern already used elsewhere), so the button never just breaks.
+- `src/app/api/proposals/[id]/invoice/email/route.ts` (new) — sends an invoice-summary email; separate from the existing `.../invoice/route.ts`, which only renders an invoice page/PDF for staff.
+- `src/app/api/proposals/[id]/payment-reminder/route.ts` (new) — computes outstanding balance from `proposal.total_price` minus payments received so far (works even if no `invoices` row exists yet), refuses to send if balance is already zero.
+- `src/app/api/proposals/[id]/booking-confirmation/route.ts` (new) — for once a proposal is confirmed.
+- `src/app/api/leads/[id]/follow-up-email/route.ts` (new) — email channel for lead follow-ups, alongside the existing WhatsApp follow-up system (not merged into it, to avoid touching the working scheduled WhatsApp cron logic).
+- All 4 new routes require `requireAuth()` (staff-only), matching the ISS-002 pattern used everywhere else in the app.
+
+**`.env.example`:** documented `RESEND_API_KEY` and `EMAIL_FROM` with setup notes.
+
+**Incident:** `.env.example` was truncated mid-edit by the Edit tool again (cut off mid-way through a multi-byte UTF-8 box-drawing character, `tail -c` showed a replacement-character `�`). Reconstructed via the heredoc-to-/tmp-then-cp pattern and re-verified byte-for-byte; all other new files in this feature were written directly via heredoc from the start and had no corruption.
+
+**Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean, same pre-existing warning), `npx vitest run` (11/11 passing). Full `npm run build` and a live send test still pending — user needs to (1) run migration 011 in Supabase, (2) sign up for Resend and get an API key, (3) add `RESEND_API_KEY`/`EMAIL_FROM` to `.env.local`, (4) restart the dev server and test.
+
+**Deliberately not done:** did not touch `src/app/api/whatsapp/campaigns/route.ts` or the broader WhatsApp campaign system in this pass — the user's WhatsApp priority is being handled separately (checking Meta template approval status), and this pass was scoped tightly to "real proposal emails" per the user's explicit requirements list.
+
+---
