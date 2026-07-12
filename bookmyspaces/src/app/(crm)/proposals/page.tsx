@@ -920,6 +920,30 @@ export default function ProposalsPage() {
     } catch(err) { console.error('[Proposals] status update error:',err) }
   }
 
+  async function handleSendEmail(proposalId:string) {
+    try {
+      const res = await fetch('/api/proposals/email', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ proposal_id: proposalId }),
+      })
+      const data = await res.json().catch(()=>({}))
+      if (!res.ok) {
+        alert(data.error ? `Could not send email: ${data.error}` : 'Could not send email.')
+        return
+      }
+      if (data.method === 'email') {
+        alert(`Proposal emailed to ${data.sent_to}.`)
+      } else if (data.method === 'mailto') {
+        // No email provider configured yet — same graceful fallback the
+        // backend has always had (see src/app/api/proposals/email/route.ts).
+        window.open(data.mailto_url, '_blank')
+      }
+      handleStatusUpdate(proposalId, 'sent')
+    } catch {
+      alert('Could not send email — please try again.')
+    }
+  }
+
   function handleAction(action:string,proposalId:string) {
     const proposal=proposals.find(p=>p.id===proposalId); if (!proposal) return
     if (action==='send_via_whatsapp'&&proposal.client_phone) {
@@ -927,8 +951,12 @@ export default function ProposalsPage() {
       window.open(`https://wa.me/${proposal.client_phone.replace(/\D/g,'')}?text=${msg}`,'_blank')
       handleStatusUpdate(proposalId,'sent')
     } else if (action==='send_via_email') {
-      window.open(`mailto:?subject=Proposal from BookMySpaces&body=Your event proposal: ${window.location.origin}/proposals/share/${proposalId}`,'_blank')
-      handleStatusUpdate(proposalId,'sent')
+      // ISS-041 fix: this used to just open a mailto: link directly in the
+      // browser and never called the backend at all. Now it calls the real
+      // email-sending route (src/app/api/proposals/email/route.ts), which
+      // sends a real email via Resend and only falls back to mailto: if no
+      // provider is configured.
+      handleSendEmail(proposalId)
     } else if (action==='follow_up_now') {
       handleStatusUpdate(proposalId,'followed_up')
     } else if (action==='mark_accepted') {

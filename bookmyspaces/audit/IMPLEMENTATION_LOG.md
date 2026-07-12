@@ -356,3 +356,15 @@ git push origin --force --tags
 **Deliberately not done:** did not touch `src/app/api/whatsapp/campaigns/route.ts` or the broader WhatsApp campaign system in this pass — the user's WhatsApp priority is being handled separately (checking Meta template approval status), and this pass was scoped tightly to "real proposal emails" per the user's explicit requirements list.
 
 ---
+
+## Found and fixed: "Email" button on Proposals page never called the real send logic
+
+**Problem:** While preparing to test the new email system, discovered `src/app/(crm)/proposals/page.tsx`'s "Email" button (`handleAction`'s `send_via_email` branch) never called `/api/proposals/email` at all — it did its own separate `window.open('mailto:...')` directly in the browser. This is a third, independent implementation of "send proposal by email," completely bypassing both the old and new backend logic. This explains why ISS-041 was framed as "silently depends on a human opening... mailto_url" — the UI wasn't even using the route that returns that URL.
+
+**Fix:** Added `handleSendEmail()` in the page component, which calls `POST /api/proposals/email` for real, and only falls back to opening a mailto: link if the backend reports `method: 'mailto'` (no provider configured). `handleAction`'s `send_via_email` branch now calls this instead of the old inline mailto.
+
+**Incident:** the Edit tool truncated this file mid-way through the "Cards" render section on the first attempt (file is ~60KB, one of the largest files touched this session). Reconstructed the entire file via the heredoc-to-/tmp-then-cp pattern in two parts (concatenated), verified brace-balance with a small Node script in addition to the usual byte-count/tail checks, then re-verified byte-for-byte against the destination.
+
+**Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean), `npx vitest run` (11/11 passing).
+
+---
