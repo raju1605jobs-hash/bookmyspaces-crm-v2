@@ -8,6 +8,18 @@ export interface CookieItem {
   options?: CookieOptions;
 }
 
+// BUGFIX (found via live testing, 2026-07-12): the installed version of
+// @supabase/ssr in this project (0.3.0 — see package.json) only supports the
+// older per-cookie `get`/`set`/`remove` interface (confirmed against
+// node_modules/@supabase/ssr/dist/index.d.ts's CookieMethods type — it has
+// no `getAll`/`setAll` at all). This function previously passed `getAll`/
+// `setAll` methods, which this version of the library silently never calls,
+// so it could never actually read the session cookie — every API route
+// using requireAuth()/requireRole() (src/lib/auth-guard.ts) always got a
+// "no user" result and returned 401, regardless of whether the person was
+// really logged in. Page navigation worked the whole time because
+// src/lib/supabase-middleware.ts happened to already use the correct
+// get/set/remove style. Rewritten here to match that same, working style.
 export function createSupabaseServerClient() {
   const cookieStore = cookies();
 
@@ -16,17 +28,19 @@ export function createSupabaseServerClient() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
-        getAll(): CookieItem[] {
-          return cookieStore.getAll().map((c) => ({
-            name: c.name,
-            value: c.value,
-          }));
+        get(name: string) {
+          return cookieStore.get(name)?.value;
         },
-        setAll(cookiesToSet: CookieItem[]): void {
+        set(name: string, value: string, options: CookieOptions) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) => {
-              cookieStore.set(name, value, options);
-            });
+            cookieStore.set({ name, value, ...options });
+          } catch {
+            // Ignored when called from a Server Component render pass
+          }
+        },
+        remove(name: string, options: CookieOptions) {
+          try {
+            cookieStore.set({ name, value: '', ...options });
           } catch {
             // Ignored when called from a Server Component render pass
           }

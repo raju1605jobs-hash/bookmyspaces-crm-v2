@@ -4,12 +4,11 @@
 // Previously this function unconditionally returned NextResponse.next() for
 // every request ("TEMP: allow everything while stabilizing app").
 //
-// Scope: this middleware only gates PAGE navigation. API routes continue to
-// pass through here unchanged and are instead individually protected via
-// requireAuth()/requireRole() (src/lib/auth-guard.ts) per ISS-002 — this
-// matches TEST_PLAN.md's two separate scenarios ("logged-out page sweep"
-// expects a redirect; "logged-out API sweep" expects a 401 JSON body, not a
-// redirect, which is why API routes are not gated here).
+// Scope: this middleware only gates PAGE navigation with a redirect. API
+// routes are individually protected via requireAuth()/requireRole()
+// (src/lib/auth-guard.ts) per ISS-002 — this matches TEST_PLAN.md's two
+// separate scenarios ("logged-out page sweep" expects a redirect;
+// "logged-out API sweep" expects a 401 JSON body, not a redirect).
 //
 // Public pages (no session required): the landing page, the auth flow itself,
 // and the proposal share-token page (customers reach this via a link with no
@@ -34,29 +33,44 @@ function isPublicPage(pathname: string): boolean {
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
-  // API routes, Next.js internals, and static files are never gated here.
-  // API auth is enforced per-route (ISS-002); static/internal requests have
-  // no concept of a "session" to check.
-  if (
-    pathname.startsWith('/api') ||
-    pathname.startsWith('/_next') ||
-    pathname.includes('.')
-  ) {
+  // Next.js internals and static files have no concept of a "session" —
+  // truly skip these, no Supabase client needed at all.
+  if (pathname.startsWith('/_next') || pathname.includes('.')) {
     return NextResponse.next()
   }
 
-  if (isPublicPage(pathname)) {
-    return NextResponse.next()
-  }
-
-  // Every other page requires a valid Supabase session.
+  // BUGFIX (found via live testing, 2026-07-12): API routes used to be
+  // excluded from this whole function, on the theory that "API auth is
+  // enforced per-route (ISS-002) so middleware doesn't need to do anything
+  // here." That's true for the *authorization* check, but it accidentally
+  // skipped *session refresh* too. Supabase's short-lived access token is
+  // normally refreshed automatically whenever supabase.auth.getUser() runs
+  // in middleware, which rewrites a fresh cookie onto the response. Page
+  // navigations go through this middleware and got refreshed; direct API
+  // calls (e.g. clicking "Create Proposal") never did, so once the access
+  // token quietly expired, pages kept working (middleware refreshed them)
+  // while any API POST/PATCH suddenly started failing with 401 — exactly
+  // what surfaced when the user tried to create a proposal.
+  //
+  // Fix: still run the Supabase client (which refreshes + re-sets cookies
+  // when needed) for API requests too — just never redirect them. The
+  // actual "is this request allowed" decision stays with requireAuth() /
+  // requireRole() per-route, unchanged from ISS-002.
   const response = NextResponse.next()
   const supabase = createMiddlewareAuthClient(request, response)
-
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
+  if (pathname.startsWith('/api')) {
+    return response
+  }
+
+  if (isPublicPage(pathname)) {
+    return response
+  }
+
+  // Every other page requires a valid Supabase session.
   if (!user) {
     const loginUrl = new URL('/auth/login', request.url)
     loginUrl.searchParams.set('redirect', pathname)

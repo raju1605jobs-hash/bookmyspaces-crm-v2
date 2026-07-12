@@ -368,3 +368,29 @@ git push origin --force --tags
 **Verification:** `npx tsc --noEmit` (clean), `npx next lint` (clean), `npx vitest run` (11/11 passing).
 
 ---
+
+## 2026-07-12 — Fixed: "Unauthorized — please log in" blocking every protected API route
+
+**Problem:** After the email system was built and configured, live testing of "Create Proposal" failed every time with `401 Unauthorized — please log in`, despite the user being genuinely logged in (confirmed reproducible in two different browsers, and NOT fixed by an earlier middleware session-refresh patch).
+
+**Cause:** `src/lib/supabase-server.ts` (used by `getCurrentUser()` → `requireAuth()`/`requireRole()`, the gate on ~25+ API routes across the whole ISS-002 rollout) configured its Supabase client's cookie handling using a `{ getAll, setAll }` interface. The installed package, `@supabase/ssr@^0.3.0` (confirmed via `package.json` and `node_modules/@supabase/ssr/dist/index.d.ts`), only defines `CookieMethods` as `{ get?, set?, remove? }` in this version — there is no `getAll`/`setAll` support at all. Because the library never calls the methods that were actually provided, `supabase.auth.getUser()` inside every protected Route Handler silently never read the session cookie, so `requireAuth()` always rejected regardless of real login state. Page-level auth (via `src/middleware.ts`) was unaffected because `src/lib/supabase-middleware.ts` already used the correct, matching `get`/`set`/`remove` interface — which is why navigating between pages worked fine while every API POST/PATCH failed.
+
+**Impact:** This bug affected every API route protected by `requireAuth()`/`requireRole()` since ISS-002 was first rolled out (batches 1-3, ~25+ routes) — not just proposal creation. It had gone unnoticed until now because this was the first live, authenticated API write tested end-to-end in the browser.
+
+**Fix:** Rewrote `createSupabaseServerClient()` in `src/lib/supabase-server.ts` to use the same `get`/`set`/`remove` cookie interface already proven to work in `supabase-middleware.ts`, backed by `next/headers`'s `cookies()`.
+
+**Verification:** `npx tsc --noEmit` (clean). Live-tested by the user: proposal creation now succeeds (`POST /api/proposals` → 201), confirmed via the Proposals list growing from 18 to 19 to 20 proposals across two test creates.
+
+---
+
+## 2026-07-12 — Verified: real proposal email sending works end-to-end (ISS-041 closed out)
+
+**Verification performed:** With the auth bug above fixed, the user created a test proposal and clicked "Email." First attempt correctly reached Resend for real (no more silent mailto bypass, no more 401) but returned `502 Email send failed`. Terminal logs showed the real reason: `You can only send testing emails to your own email address (raju.1605.jobs@gmail.com)` — this is Resend's standard safety restriction on accounts that haven't verified a sending domain yet (the shared `onboarding@resend.dev` address may only send to the account owner's own address). Not a code bug.
+
+**Confirmation test:** User created a second test proposal using `raju.1605.jobs@gmail.com` as the client email and clicked "Email" again. Result: `"Proposal emailed to raju.1605.jobs@gmail.com."` — real send succeeded, proposal status auto-updated to "Sent."
+
+**Known limitation (documented, not a bug):** until a real domain is verified at resend.com/domains and `EMAIL_FROM` is updated to use it, this system can only deliver to `raju.1605.jobs@gmail.com`. Sending to actual customer addresses requires that one-time Resend domain verification step — not urgent, can be done whenever the user is ready to send real customer emails.
+
+**Status:** ISS-041 (real proposal email sending) is now fully verified working end-to-end, including the underlying auth fix that was blocking it.
+
+---
