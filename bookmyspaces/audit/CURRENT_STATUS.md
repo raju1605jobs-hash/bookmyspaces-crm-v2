@@ -62,3 +62,7 @@ The Edit tool has silently truncated files mid-write repeatedly this session —
 3. Manually click-test login/logout/redirect behavior for the new middleware (ISS-001) and the OAuth callback consolidation (ISS-027/028) — this sandbox has no network path to Supabase to do this itself.
 4. Delete the 3 confirmed-safe stray files/directories (ISS-013/021/022) directly on your own machine.
 5. Provide a real SMTP/transactional email provider API key (SendGrid/Resend/SES) to unblock ISS-041, if/when that's wanted.
+
+## Deferred feature request (from user, 2026-07-12) — room booking improvements
+
+User asked for room-booking-specific fields on proposals: check-in date and check-out date (instead of a single event date), a package selector, and a complimentary/chargeable breakfast option. Explicitly deferred by the user ("let's finish the project first, will add new with the need of the hour") in favor of completing the current remediation work first. Revisit when the user is ready — will need a small additive migration (new columns on `proposals` or a related table) plus UI changes to the proposal creation form and proposals list.

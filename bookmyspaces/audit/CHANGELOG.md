@@ -37,3 +37,18 @@ All notable changes to BookMySpaces CRM made during the roadmap execution (`audi
 - **ISS-025:** Reviewed all stray root files. `latest.json`/`logs.json` contained committed customer PII (name, phone numbers, message content) from production log exports (commit `43b6a15`). Emptied both files in the working tree, added them to `.gitignore`, and rewrote git history (via `git-filter-repo`, on a clean clone backed by a full pre-rewrite bundle) to strip them from every commit on every branch/tag. Local rewrite complete and verified (zero commits reference these files anywhere in history; unaffected branches confirmed byte-identical). **Push to `origin` still required from a machine with GitHub credentials — see IMPLEMENTATION_LOG.md for exact handoff commands.** No full API keys/passwords were found exposed (only a truncated, non-exploitable WhatsApp token prefix).
 - **ISS-004:** `src/app/api/whatsapp/webhook/route.ts` now verifies Meta's `X-Hub-Signature-256` HMAC-SHA256 signature before processing inbound webhook payloads; fails closed (403) when `WHATSAPP_APP_SECRET` is configured and the signature is invalid, fails open (with a logged warning) only when the secret is not yet configured.
 - **ISS-001/ISS-003/ISS-002:** Closed the largest outstanding gap in the audit — the entire CRM was reachable without authentication (no middleware session check, no per-route auth checks on ~25 API routes, admin routes gated by a client-editable role field instead of a server-side check). All three are now fixed together as "Phase 2 authentication." Not live-click-tested end-to-end (this sandbox has no network access to Supabase); verified via `tsc`, `next lint`, and `vitest` only — a manual login/click-through pass is still recommended before this ships.
+
+## [Unreleased] — 2026-07-12 additions
+
+### Fixed
+- Missing sign-out button: `src/components/layout/CRMLayout.tsx` (the layout actually in use) had no way to log out at all. Added a working "Sign out" button, live-tested end-to-end.
+- **ISS-041:** Proposal emails now actually send via a real email provider (Resend) instead of only returning a `mailto:` link. Also discovered and fixed a deeper issue: the "Email" button on the Proposals page (`src/app/(crm)/proposals/page.tsx`) never called the backend route at all — it opened its own separate `mailto:` link directly. It now calls the real send route.
+- **ISS-037 addendum:** `.env.example` updated with `RESEND_API_KEY`/`EMAIL_FROM` documentation.
+
+### Added
+- New email-sending system: `src/lib/email/provider.ts`, `templates.ts`, `send.ts` — provider-agnostic (Resend today, swappable later), with reusable templates and full delivery logging.
+- `supabase/migrations/011_email_log.sql` — new table recording every outgoing email and its delivery status.
+- Four new staff-triggered email routes: invoice, payment reminder, follow-up, booking confirmation.
+
+### Security
+- Every new email route requires staff login (`requireAuth()`), matching the app-wide ISS-002 pattern.
