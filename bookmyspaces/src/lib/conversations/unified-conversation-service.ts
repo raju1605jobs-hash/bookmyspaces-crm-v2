@@ -34,6 +34,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { resolveIdentity, type ResolvedIdentity, type IdentityLookup } from '@/lib/identity/resolve-identity'
+import { buildAIContext } from '@/lib/ai/context-builder'
 import type {
   ChannelType,
   GetOrCreateConversationInput,
@@ -41,7 +43,9 @@ import type {
   RecordMessageInput,
   IngestInboundMessageInput,
   IngestInboundMessageResult,
+  HandleInboundMessageInput,
 } from '@/types/conversation'
+import type { AIContext } from '@/types/ai-context'
 
 // ─── Channel lookup / provisioning ───────────────────────────────────────────
 // `channels` is small, slow-changing configuration data (one row per
@@ -209,4 +213,55 @@ export async function ingestInboundMessage(
   })
 
   return { conversationId, channelId, messageId, isNewConversation }
+}
+
+// ─── handleInboundMessage — the single, channel-agnostic pipeline ──────────
+// V3 Day 4 — Priority 2 completion. Exactly the checklist the master spec
+// asks for, each step delegated to an existing service, nothing
+// reimplemented: resolve identity (src/lib/identity/resolve-identity.ts) ->
+// store the message (ingestInboundMessage, above) -> retrieve history/
+// reservations/proposals/preferences and build AI context in one call
+// (src/lib/ai/context-builder.ts's buildAIContext(), which already does
+// exactly those four retrievals) -> return one structured object.
+//
+// One function, not two — the same pipeline handles WhatsApp and Website
+// Chat (and any future channel) identically; only `channelType` and what
+// `channelIdentity` means (phone vs. email vs. session id) differ, and the
+// identity lookup below is the only place that distinction matters.
+
+export interface HandleInboundMessageResult {
+  conversationId: string
+  channelId: string
+  messageId: string
+  isNewConversation: boolean
+  identity: ResolvedIdentity | null
+  aiContext: AIContext
+}
+
+export async function handleInboundMessage(
+  input: HandleInboundMessageInput
+): Promise<HandleInboundMessageResult> {
+  const lookup: IdentityLookup =
+    input.channelType === 'email'
+      ? { email: input.channelIdentity }
+      : { phone: input.channelIdentity }
+
+  const identity = await resolveIdentity(lookup)
+
+  const ingestResult = await ingestInboundMessage({
+    channelType: input.channelType,
+    channelIdentity: input.channelIdentity,
+    content: input.content,
+    externalMessageId: input.externalMessageId ?? null,
+    rawPayload: input.rawPayload ?? null,
+    customerId: identity?.leadId ?? null,
+  })
+
+  const aiContext = await buildAIContext({
+    leadId: identity?.leadId ?? null,
+    query: input.content,
+    conversationId: ingestResult.conversationId,
+  })
+
+  return { ...ingestResult, identity, aiContext }
 }

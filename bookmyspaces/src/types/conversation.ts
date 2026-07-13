@@ -96,3 +96,15 @@ export interface IngestInboundMessageResult {
   messageId: string
   isNewConversation: boolean
 }
+
+// ─── handleInboundMessage — Priority 2 (Day 4): the single, channel-agnostic
+// pipeline. See src/lib/conversations/unified-conversation-service.ts. ────
+
+export interface HandleInboundMessageInput {
+  channelType: ChannelType
+  /** Channel-native id: phone (whatsapp/sms), email address (email), session id (website_chat). */
+  channelIdentity: string
+  content: string
+  externalMessageId?: string | null
+  rawPayload?: Record<string, unknown> | null
+}

@@ -1,5 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+const mocks = vi.hoisted(() => ({
+  resolveIdentity: vi.fn(),
+  buildAIContext: vi.fn(),
+}))
+
+vi.mock('@/lib/identity/resolve-identity', () => ({
+  resolveIdentity: mocks.resolveIdentity,
+}))
+
+vi.mock('@/lib/ai/context-builder', () => ({
+  buildAIContext: mocks.buildAIContext,
+}))
+
 const state = {
   existingChannelId: null as string | null,
   createdChannelId: 'chan-1',
@@ -119,6 +132,7 @@ import {
   getOrCreateConversation,
   recordMessage,
   ingestInboundMessage,
+  handleInboundMessage,
 } from './unified-conversation-service'
 
 function resetState() {
@@ -252,5 +266,58 @@ describe('ingestInboundMessage (Channel Adapter entry point)', () => {
     expect(result.isNewConversation).toBe(false)
     expect(result.conversationId).toBe('conv-existing')
     expect(state.touchCalls).toHaveLength(1)
+  })
+})
+
+describe('handleInboundMessage (single channel-agnostic pipeline)', () => {
+  beforeEach(() => {
+    resetState()
+    mocks.resolveIdentity.mockReset()
+    mocks.buildAIContext.mockReset().mockResolvedValue({ customerProfile: { leadId: null } })
+  })
+
+  it('resolves identity by phone for whatsapp/sms, stores the message, and builds AI context', async () => {
+    state.existingChannelId = 'chan-existing'
+    state.existingConversationId = null
+    mocks.resolveIdentity.mockResolvedValue({ leadId: 'lead-42', name: 'Priya', phone: '919051459463', email: null, matchedOn: 'phone', hasConflictingIdentifier: false })
+
+    const result = await handleInboundMessage({
+      channelType: 'whatsapp',
+      channelIdentity: '919051459463',
+      content: 'Is Skyline Serenity available this weekend?',
+    })
+
+    expect(mocks.resolveIdentity).toHaveBeenCalledWith({ phone: '919051459463' })
+    expect(mocks.buildAIContext).toHaveBeenCalledWith({ leadId: 'lead-42', query: 'Is Skyline Serenity available this weekend?', conversationId: 'conv-1' })
+    expect(result.conversationId).toBe('conv-1')
+    expect(result.identity?.leadId).toBe('lead-42')
+    expect(result.aiContext).toEqual({ customerProfile: { leadId: null } })
+  })
+
+  it('resolves identity by email for the email channel', async () => {
+    state.existingChannelId = 'chan-existing'
+    mocks.resolveIdentity.mockResolvedValue(null)
+
+    await handleInboundMessage({
+      channelType: 'email',
+      channelIdentity: 'priya@example.com',
+      content: 'Following up on my quote',
+    })
+
+    expect(mocks.resolveIdentity).toHaveBeenCalledWith({ email: 'priya@example.com' })
+  })
+
+  it('passes leadId: null to buildAIContext when identity does not resolve', async () => {
+    state.existingChannelId = 'chan-existing'
+    mocks.resolveIdentity.mockResolvedValue(null)
+
+    const result = await handleInboundMessage({
+      channelType: 'website_chat',
+      channelIdentity: 'session-abc',
+      content: 'Do you have rooftop venues?',
+    })
+
+    expect(result.identity).toBeNull()
+    expect(mocks.buildAIContext).toHaveBeenCalledWith(expect.objectContaining({ leadId: null }))
   })
 })
