@@ -836,6 +836,16 @@ function ProposalCard({proposal,onAction,onStatusUpdate,onPayment,onReceipts,onF
               className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-xs font-semibold hover:bg-amber-100 transition-colors">
               <Wallet className="w-3 h-3"/> Financial Documents
             </button>
+
+            {/* V3 Sprint 3 — Convert Proposal -> Reservation. Only offered once
+                accepted (converting a still-negotiating proposal into a real
+                inventory hold would be premature). Pre-fills the Reservation
+                Dashboard's New Reservation modal from this proposal's data;
+                the operator still picks/confirms dates + inventory there. */}
+            <Link href={`/reservations?fromProposalId=${proposal.id}`}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold hover:bg-indigo-100 transition-colors">
+              <BookOpen className="w-3 h-3"/> Convert to Reservation
+            </Link>
           </>
         )}
 

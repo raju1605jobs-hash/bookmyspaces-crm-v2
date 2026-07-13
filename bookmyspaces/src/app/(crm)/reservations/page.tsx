@@ -19,8 +19,9 @@
 // there being no reservation data yet.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useEffect, useState, useCallback, useMemo } from 'react'
+import { useEffect, useState, useCallback, useMemo, Suspense } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import {
   Calendar, LogIn, LogOut, Clock, CheckCircle2, IndianRupee,
   Plus, X, RefreshCw, AlertTriangle, ChevronRight, Building2,
@@ -64,6 +65,19 @@ interface PriceQuote {
   isComplete: boolean
 }
 
+// V3 Sprint 3 — Convert Proposal -> Reservation. Data pulled from
+// GET /api/proposals?id= to prefill the New Reservation modal when arriving
+// via the Proposals page's "Convert to Reservation" link.
+interface ProposalPrefill {
+  proposalId: string
+  guestName: string
+  guestMobile: string
+  guestEmail: string | null
+  propertyId: string | null
+  inventoryItemId: string | null
+  checkInDate: string | null
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function todayISO(): string {
@@ -97,10 +111,23 @@ const STATUS_STYLE: Record<ReservationStatus, string> = {
 const ACTIVE_STATUSES: ReservationStatus[] = ['inquiry', 'tentative', 'confirmed', 'checked_in']
 
 export default function ReservationDashboardPage() {
+  return (
+    <Suspense fallback={<div className="text-sm text-gray-400 p-6">Loading…</div>}>
+      <ReservationDashboardContent />
+    </Suspense>
+  )
+}
+
+function ReservationDashboardContent() {
+  const searchParams = useSearchParams()
+  const fromProposalId = searchParams.get('fromProposalId')
+
   const [reservations, setReservations] = useState<ReservationRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showNewModal, setShowNewModal] = useState(false)
+  const [proposalPrefill, setProposalPrefill] = useState<ProposalPrefill | null>(null)
+  const [proposalPrefillError, setProposalPrefillError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -118,6 +145,38 @@ export default function ReservationDashboardPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // V3 Sprint 3 — arriving from the Proposals page's "Convert to Reservation"
+  // link: fetch the proposal and auto-open the New Reservation modal
+  // prefilled with its guest/property/date details. The operator still
+  // confirms/adjusts everything (esp. inventory + dates) before creating.
+  useEffect(() => {
+    if (!fromProposalId) return
+    fetch(`/api/proposals?id=${fromProposalId}`)
+      .then((r) => r.json())
+      .then((json) => {
+        const p = json.proposal
+        if (!p) {
+          setProposalPrefillError('Could not find that proposal — pick details manually.')
+          setShowNewModal(true)
+          return
+        }
+        setProposalPrefill({
+          proposalId: p.id,
+          guestName: p.client_name ?? '',
+          guestMobile: p.client_phone ?? '',
+          guestEmail: p.client_email ?? null,
+          propertyId: p.property_id ?? null,
+          inventoryItemId: p.inventory_item_id ?? null,
+          checkInDate: p.event_date ?? null,
+        })
+        setShowNewModal(true)
+      })
+      .catch(() => {
+        setProposalPrefillError('Could not load proposal details — pick details manually.')
+        setShowNewModal(true)
+      })
+  }, [fromProposalId])
 
   const today = todayISO()
 
@@ -167,6 +226,12 @@ export default function ReservationDashboardPage() {
       {error && (
         <div className="flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
           <AlertTriangle className="w-4 h-4" /> {error}
+        </div>
+      )}
+
+      {proposalPrefillError && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-700">
+          <AlertTriangle className="w-4 h-4" /> {proposalPrefillError}
         </div>
       )}
 
@@ -243,8 +308,9 @@ export default function ReservationDashboardPage() {
 
       {showNewModal && (
         <NewReservationModal
-          onClose={() => setShowNewModal(false)}
-          onCreated={() => { setShowNewModal(false); load() }}
+          initial={proposalPrefill}
+          onClose={() => { setShowNewModal(false); setProposalPrefill(null) }}
+          onCreated={() => { setShowNewModal(false); setProposalPrefill(null); load() }}
         />
       )}
     </div>
@@ -276,13 +342,20 @@ function StatCard({
 // three steps reservation-workflow.ts already implements — this form just
 // calls the two API routes wrapping them in the same order.
 
-function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function NewReservationModal({
+  initial, onClose, onCreated,
+}: {
+  initial?: ProposalPrefill | null
+  onClose: () => void
+  onCreated: () => void
+}) {
   const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([])
   const [loadingProps, setLoadingProps] = useState(true)
-  const [inventoryItemId, setInventoryItemId] = useState('')
-  const [guestName, setGuestName] = useState('')
-  const [guestMobile, setGuestMobile] = useState('')
-  const [checkInDate, setCheckInDate] = useState(todayISO())
+  const [inventoryItemId, setInventoryItemId] = useState(initial?.inventoryItemId ?? '')
+  const [guestName, setGuestName] = useState(initial?.guestName ?? '')
+  const [guestMobile, setGuestMobile] = useState(initial?.guestMobile ?? '')
+  const [guestEmail, setGuestEmail] = useState(initial?.guestEmail ?? '')
+  const [checkInDate, setCheckInDate] = useState(initial?.checkInDate || todayISO())
   const [checkOutDate, setCheckOutDate] = useState('')
   const [quote, setQuote] = useState<PriceQuote | null>(null)
   const [available, setAvailable] = useState<boolean | null>(null)
@@ -340,11 +413,13 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
         body: JSON.stringify({
           guestName,
           guestMobile: guestMobile || null,
-          propertyId: selectedItem?.propertyId,
+          guestEmail: guestEmail || null,
+          propertyId: selectedItem?.propertyId ?? initial?.propertyId,
           inventoryItemId,
           checkInDate,
           checkOutDate,
           bookingSource: 'direct',
+          proposalId: initial?.proposalId ?? null,
         }),
       })
       const json = await res.json()
@@ -368,6 +443,12 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
         </div>
 
         <div className="p-6 space-y-4">
+          {initial && (
+            <div className="text-sm text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+              Prefilled from an accepted proposal. Confirm the room/hall and dates, then create the reservation to link it back to that proposal.
+            </div>
+          )}
+
           {loadingProps ? (
             <div className="text-sm text-gray-400 flex items-center gap-2"><RefreshCw className="w-4 h-4 animate-spin" /> Loading properties…</div>
           ) : inventoryItems.length === 0 ? (
@@ -455,6 +536,16 @@ function NewReservationModal({ onClose, onCreated }: { onClose: () => void; onCr
                 placeholder="98765 43210"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-gray-500">Email (optional)</label>
+            <input
+              value={guestEmail}
+              onChange={(e) => setGuestEmail(e.target.value)}
+              className="mt-1 w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+              placeholder="priya@example.com"
+            />
           </div>
 
           {formError && <div className="text-sm text-red-700">{formError}</div>}
