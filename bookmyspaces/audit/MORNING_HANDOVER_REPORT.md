@@ -5,7 +5,7 @@
 | **Session** | 2026-07-12 evening → 2026-07-13 morning |
 | **Branch** | `feature/v3-omnichannel-platform` |
 | **Baseline commit** | `fed963e` (tag `crm-v2-final`) |
-| **Commits created this session** | 0 (see "Why no commits" below) |
+| **Commits created this session** | 2 — `1daaadb`, `6f9ba1e` (both docs-only, listed in Git Report below) |
 | **Read this first** | Section 1 (git repair) and Section 2 (PII exposure) — Section 2 needs your decision before anything else continues |
 
 ---
@@ -104,8 +104,11 @@ None. No migrations were run or applied — this sandbox has no live Supabase ne
 
 ## Git Report
 
-- **Commits created:** 0. The repair itself required no new commit (working tree already matched `HEAD` exactly once the index was rebuilt). Documentation updates above are uncommitted in the working tree — recommend reviewing this report and the PHASE1 doc changes, then committing with a message like `docs: repair git corruption, flag PII-in-history exposure` once you've read Section 2.
-- **Branch:** `feature/v3-omnichannel-platform`, unchanged at `fed963e`.
+- **Commits created:** 2, both docs-only, both already on `feature/v3-omnichannel-platform`:
+  - `1daaadb` — "docs: repair git corruption (HEAD null bytes, corrupted index), flag PII-in-pushed-history exposure" (added this report)
+  - `6f9ba1e` — "docs: fix PHASE1 architecture review edits that were dropped from previous commit" (see note below — the first commit attempt on the architecture-review doc silently failed, caught before it caused harm)
+- **Branch:** `feature/v3-omnichannel-platform`, now at `6f9ba1e` (was `fed963e` at session start).
+- **Note on a near-miss this session:** while committing the `PHASE1_ARCHITECTURE_REVIEW_OMNICHANNEL.md` edits, this mount's file metadata (mtime/size) briefly lied to git's normal `add`/`diff` path — git reported "no change" even though the edit was genuinely on disk, confirmed by direct content hashing. Retrying the edit through the normal editing tool then silently truncated the file (the exact "file-truncation" bug this project's own `NEXT_STEPS.md`/`CURRENT_STATUS.md` already documented happening on this mount before). Caught immediately by reviewing the staged diff before committing — nothing bad was committed — then rebuilt correctly from the last known-good commit using a verified Python string-replace + plain `cp`, with a full byte-for-byte diff check before staging. Full integrity check afterward (`git hash-object` on all 259 tracked files, compared against what the index records) came back with zero mismatches. Flagging this as a second, independent confirmation of the file-write reliability issue this project has now hit across at least two different sessions — worth treating as a standing operational hazard on this specific mounted folder, not a one-off.
 
 ## Risks (ranked)
 
