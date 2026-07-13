@@ -8,7 +8,6 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { buildSegment, generateFestivalMessage, generateCampaignMessage, getUpcomingFestivals } from '@/lib/campaigns'
 import { requireAuth } from '@/lib/auth-guard'
 
-// GET — list campaigns + upcoming festivals
 export async function GET(req: NextRequest) {
   const auth = await requireAuth()
   if (!auth.ok) return auth.response
@@ -37,7 +36,6 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST — create, preview, or send campaign
 export async function POST(req: NextRequest) {
   const auth = await requireAuth()
   if (!auth.ok) return auth.response
@@ -129,11 +127,11 @@ export async function POST(req: NextRequest) {
 
       let sent = 0, failed = 0
 
-      const { sendWhatsAppMessage } = await import('@/lib/whatsapp')
+      const { sendWhatsAppText } = await import('@/lib/whatsapp/send-message')
       for (const r of broadcastRecipients) {
         try {
-          const ok = await sendWhatsAppMessage(r.whatsappNumber, campaign.message_template)
-          if (ok) sent++
+          const result = await sendWhatsAppText(r.whatsappNumber, campaign.message_template)
+          if (result.success) sent++
           else failed++
           await new Promise(resolve => setTimeout(resolve, 1200))
         } catch {
@@ -156,7 +154,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// PATCH — update campaign
 export async function PATCH(req: NextRequest) {
   const auth = await requireAuth()
   if (!auth.ok) return auth.response

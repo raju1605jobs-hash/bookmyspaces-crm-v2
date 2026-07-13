@@ -1,11 +1,4 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// FILE: src/types/whatsapp.ts
-// All TypeScript types for WhatsApp Cloud API integration.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { ConversationState, MessageDirection, MessageStatus, SourceChannel } from '@/constants/conversation-states'
-
-// ─── WhatsApp Cloud API Webhook Payload Types ────────────────────────────────
 
 export interface WAWebhookPayload {
   object: string
@@ -13,7 +6,7 @@ export interface WAWebhookPayload {
 }
 
 export interface WAEntry {
-  id: string            // WhatsApp Business Account ID
+  id: string
   changes: WAChange[]
 }
 
@@ -42,7 +35,7 @@ export interface WAContact {
 
 export interface WAInboundMessage {
   from: string
-  id: string             // wamid — used for dedup
+  id: string
   timestamp: string
   type: WAMessageType
   text?: { body: string }
@@ -88,14 +81,12 @@ export interface WAInteractive {
 }
 
 export interface WAStatusUpdate {
-  id: string             // wamid of the outbound message
+  id: string
   status: 'sent' | 'delivered' | 'read' | 'failed'
   timestamp: string
   recipient_id: string
   errors?: Array<{ code: number; title: string }>
 }
-
-// ─── Send Message Request Types ──────────────────────────────────────────────
 
 export interface WASendTextRequest {
   messaging_product: 'whatsapp'
@@ -135,8 +126,6 @@ export interface WASendResponse {
   messages: Array<{ id: string }>
 }
 
-// ─── Internal CRM Types ──────────────────────────────────────────────────────
-
 export interface WhatsAppConversation {
   id: string
   created_at: string
@@ -173,8 +162,6 @@ export interface WhatsAppMessage {
   raw_payload: Record<string, unknown>
 }
 
-// ─── Service Layer Types ──────────────────────────────────────────────────────
-
 export interface ProcessInboundResult {
   success: boolean
   leadId: string | null
@@ -196,4 +183,14 @@ export interface AutoResponseContext {
   inboundText: string | null
   leadId: string | null
   leadName: string | null
+}
+
+export interface TemplateParam {
+  name: string
+  value: string
+}
+
+export interface BroadcastRecipient {
+  whatsappNumber: string
+  customParams?: TemplateParam[]
 }

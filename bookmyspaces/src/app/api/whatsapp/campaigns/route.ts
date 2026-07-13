@@ -5,7 +5,7 @@ export const maxDuration = 120
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { logger } from '@/lib/logger'
-import { sendBroadcastCampaign } from '@/lib/whatsapp'
+import { sendBroadcastCampaign } from '@/lib/whatsapp/send-message'
 import { APPROVED_TEMPLATES, TEMPLATE_PARAMS } from '@/lib/templates'
 import { requireAuth } from '@/lib/auth-guard'
 

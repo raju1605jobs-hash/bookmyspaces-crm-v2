@@ -5,10 +5,10 @@
 import { getSupabaseAdmin } from './supabase'
 import { logger }           from './logger'
 import {
-  sendWhatsAppMessage,
-  sendTemplateMessage,
-  isMetaConfigured,
-} from './whatsapp'
+  sendWhatsAppText,
+  sendWhatsAppTemplateSimple,
+} from './whatsapp/send-message'
+import { isMetaConfigured } from './whatsapp/meta-configured'
 
 // ─── TYPES ────────────────────────────────────────────────────
 export interface QueuedMessage {
@@ -110,9 +110,9 @@ export async function smartSend(
   }
   let success = false
   if (options.type === 'template' && options.templateName) {
-    success = await sendTemplateMessage(phone, options.templateName, options.templateParams)
+    success = (await sendWhatsAppTemplateSimple(phone, options.templateName, options.templateParams)).success
   } else {
-    success = await sendWhatsAppMessage(phone, message)
+    success = (await sendWhatsAppText(phone, message)).success
   }
   if (success) markSent(phone)
   return success

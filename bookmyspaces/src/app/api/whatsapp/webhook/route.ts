@@ -2,7 +2,7 @@
 // Meta Cloud API webhook — verification + inbound message handling
 
 import { NextRequest, NextResponse } from 'next/server'
-import { sendWhatsAppMessage }       from '@/lib/whatsapp'
+import { sendWhatsAppText }          from '@/lib/whatsapp/send-message'
 import { getSupabaseAdmin }          from '@/lib/supabase'
 import { verifySignature }           from '@/lib/whatsapp/verify-signature'
 
@@ -10,7 +10,6 @@ export const dynamic    = 'force-dynamic'
 export const runtime    = 'nodejs'
 export const maxDuration = 30
 
-// ─── GET — Meta webhook verification ─────────────────────────
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url)
 
@@ -44,15 +43,6 @@ export async function GET(request: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 })
 }
 
-// ─── Signature verification ───────────────────────────────────
-// ISS-004 (audit/MASTER_ISSUE_REGISTER.csv): moved to
-// src/lib/whatsapp/verify-signature.ts (V3 Day 2) so the Provider Framework's
-// WhatsAppMessagingProvider adapter can reuse the exact same check instead of
-// duplicating it. Behavior here is unchanged — same 3-state result, same
-// "unconfigured" flag-first rollout (RISK_REGISTER.md).
-//
-// ─── POST — Incoming messages & status updates ────────────────
-// Always return 200 — a non-200 causes Meta to retry for 72 hours.
 export async function POST(request: NextRequest) {
   const rawBody = await request.text()
   const signatureCheck = verifySignature(rawBody, request.headers.get('x-hub-signature-256'))
@@ -83,7 +73,6 @@ export async function POST(request: NextRequest) {
 
         const value = change.value
 
-        // Delivery / read status updates — log only
         for (const status of value.statuses ?? []) {
           console.log('[WA] Status update:', {
             id:        status.id,
@@ -93,7 +82,6 @@ export async function POST(request: NextRequest) {
           })
         }
 
-        // Inbound messages
         for (const message of value.messages ?? []) {
           const contact    = value.contacts?.find(c => c.wa_id === message.from)
           const senderName = contact?.profile?.name ?? 'Unknown'
@@ -108,7 +96,6 @@ export async function POST(request: NextRequest) {
   return new NextResponse('OK', { status: 200 })
 }
 
-// ─── Message dispatcher ───────────────────────────────────────
 async function handleIncomingMessage(
   message:    WhatsAppMessage,
   senderName: string
@@ -120,10 +107,8 @@ async function handleIncomingMessage(
       const text  = message.text?.body ?? ''
       const reply = await buildAutoReply(text, senderName)
 
-      // Send reply first — never block on DB
-      await sendWhatsAppMessage(from, reply)
+      await sendWhatsAppText(from, reply)
 
-      // Persist inbound + outbound to conversations table
       await persistConversation(from, senderName, text, reply)
     }
   } catch (err) {
@@ -131,10 +116,6 @@ async function handleIncomingMessage(
   }
 }
 
-// ─── Persist inbound message + auto-reply to DB ───────────────
-// Uses phone as session_id for WhatsApp conversations.
-// Upserts conversation row, appends both turns to messages JSONB array.
-// Updates lead timestamps if a matching lead exists.
 async function persistConversation(
   phone:      string,
   senderName: string,
@@ -145,7 +126,6 @@ async function persistConversation(
   const sessionId = `wa_${phone}`
   const now       = new Date().toISOString()
 
-  // 1. Look up lead by phone
   const { data: lead } = await db
     .from('leads')
     .select('id')
@@ -154,7 +134,6 @@ async function persistConversation(
 
   const leadId = lead?.id ?? null
 
-  // 2. Fetch existing conversation (to append, not overwrite)
   const { data: existing } = await db
     .from('conversations')
     .select('id, messages')
@@ -171,7 +150,6 @@ async function persistConversation(
   ]
 
   if (existing?.id) {
-    // Update existing conversation
     await db
       .from('conversations')
       .update({
@@ -181,7 +159,6 @@ async function persistConversation(
       })
       .eq('id', existing.id)
   } else {
-    // Insert new conversation
     await db
       .from('conversations')
       .insert({
@@ -195,7 +172,6 @@ async function persistConversation(
       })
   }
 
-  // 3. Update lead timestamps if lead exists
   if (leadId) {
     await db
       .from('leads')
@@ -208,11 +184,6 @@ async function persistConversation(
   }
 }
 
-// ─── Auto-reply builder ───────────────────────────────────────
-// ISS-047 (audit/MASTER_ISSUE_REGISTER.csv): the "price"/"rate" branch used to return a
-// hardcoded, incorrect generic rate ("Rooms start from ₹1,500/night"). It now queries the
-// live `packages` table (supabase/migrations/007_missing_tables.sql) so the quoted prices
-// always match whatever is actually seeded/active, instead of drifting out of sync again.
 async function buildAutoReply(text: string, name: string): Promise<string> {
   const lower = text.toLowerCase()
 
@@ -228,7 +199,6 @@ async function buildAutoReply(text: string, name: string): Promise<string> {
   return `Hi ${name}! 🏡 Thanks for reaching out to Book My Space. Our team will respond shortly. Call us at +91 90514 59463 or visit www.bookmyspaces.in`
 }
 
-// ─── Pricing reply — sourced live from the `packages` table ───
 async function buildPricingReply(name: string): Promise<string> {
   const fallback = `Hi ${name}! Rooms at Skyline Serenity start from ₹999/night, and our rooftop event packages at MonuRama start from ₹42,000. Share your dates and guest count for a precise quote!`
 
@@ -263,7 +233,6 @@ async function buildPricingReply(name: string): Promise<string> {
   }
 }
 
-// ─── Types ────────────────────────────────────────────────────
 interface ConversationMessage {
   role:      'user' | 'assistant'
   content:   string

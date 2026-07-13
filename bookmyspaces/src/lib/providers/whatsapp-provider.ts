@@ -1,33 +1,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // FILE: src/lib/providers/whatsapp-provider.ts
 // V3 Day 2 — Provider Framework integration
+// V3 Day 3 — updated to delegate to the consolidated sender
+// (src/lib/whatsapp/send-message.ts) after the WhatsApp sender consolidation
+// decided by the Product Owner (audit/DAY3_EXECUTION_REPORT.md). The
+// duplicate-sender situation flagged on Day 2 is resolved: send-message.ts
+// is now the only implementation, with retry logic and whatsapp_messages
+// logging on every call site, including this adapter's.
 //
-// Implements MessagingProvider (src/lib/providers/types.ts) by delegating to
-// the existing, live src/lib/whatsapp.ts functions. This is a pure adapter:
-// no Meta API call, retry logic, or logging behavior is reimplemented here —
-// every method body is a direct pass-through. Calling this adapter has the
-// exact same observable effect as calling sendWhatsAppMessage/
-// sendTemplateMessage directly.
-//
-// IMPORTANT — found during this integration, not previously documented:
-// this codebase has TWO parallel WhatsApp senders:
-//   1. src/lib/whatsapp.ts (sendWhatsAppMessage / sendTemplateMessage) —
-//      used by the webhook route's auto-reply, the campaigns route, and
-//      queue.ts's smartSend. Returns boolean. No per-message DB log, no
-//      retry loop.
-//   2. src/lib/whatsapp/send-message.ts (sendWhatsAppText /
-//      sendWhatsAppTemplate) — used only by auto-responder.ts. Returns a
-//      result object, retries failed sends, logs every attempt to the
-//      whatsapp_messages table.
-// This adapter wraps (1), the more widely-used of the two, because
-// unifying them is a real architectural decision (which one becomes "the"
-// implementation, and what happens to the retry/logging behavior only (2)
-// has) that affects a live production path this sandbox cannot test —
-// exactly the kind of call this session's rules say to flag, not decide
-// silently. See audit/DAY2_EXECUTION_REPORT.md.
+// Still a pure adapter: no Meta API call or retry logic is reimplemented
+// here — every method body delegates to the consolidated sender.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { sendWhatsAppMessage, sendTemplateMessage } from '@/lib/whatsapp'
+import { sendWhatsAppText, sendWhatsAppTemplateSimple } from '@/lib/whatsapp/send-message'
 import { verifySignature } from '@/lib/whatsapp/verify-signature'
 import type { MessagingProvider, OutboundMessage, ProviderResponse, SendResult } from './types'
 
@@ -42,35 +27,27 @@ export const whatsAppProvider: MessagingProvider = {
       }
     }
 
-    const success = message.templateName
-      ? await sendTemplateMessage(
+    const result = message.templateName
+      ? await sendWhatsAppTemplateSimple(
           message.recipientId,
           message.templateName,
           message.templateParams
             ? Object.entries(message.templateParams).map(([name, value]) => ({ name, value }))
             : []
         )
-      : await sendWhatsAppMessage(message.recipientId, message.text ?? '')
+      : await sendWhatsAppText(message.recipientId, message.text ?? '')
 
-    if (!success) {
-      // sendWhatsAppMessage/sendTemplateMessage log the real failure reason
-      // internally (console.error + logger.error) and only return a
-      // boolean — this adapter cannot surface a more specific error without
-      // changing those functions' return type, which would be an existing-
-      // module change out of scope for a pure adapter.
+    if (!result.success) {
       return {
         ok: false,
-        error: { code: 'send_failed', message: 'WhatsApp send failed — see server logs for detail', retryable: true },
+        error: { code: 'send_failed', message: result.error ?? 'WhatsApp send failed — see server logs for detail', retryable: true },
       }
     }
 
     return {
       ok: true,
       data: {
-        // sendWhatsAppMessage/sendTemplateMessage don't return Meta's message
-        // id today (unlike send-message.ts's sendWhatsAppText, which does) —
-        // surfaced honestly as unknown rather than fabricating one.
-        providerMessageId: 'unknown',
+        providerMessageId: result.waMessageId ?? 'unknown',
         channel: 'whatsapp',
         status: 'sent',
       },

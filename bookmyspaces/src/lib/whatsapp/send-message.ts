@@ -1,18 +1,19 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// FILE: src/lib/whatsapp/send-message.ts
-// Retry-safe outbound message sender for WhatsApp Cloud API.
-// Logs every attempt to whatsapp_messages table.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { MessageDirection, MessageStatus, SourceChannel } from '@/constants/conversation-states'
-import type { WASendTextRequest, WASendTemplateRequest, WASendResponse, SendMessageResult } from '@/types/whatsapp'
+import { normalizePhone } from './normalize-phone'
+import { isMetaConfigured } from './meta-configured'
+import type {
+  WASendTextRequest,
+  WASendTemplateRequest,
+  WASendResponse,
+  SendMessageResult,
+  TemplateParam,
+  BroadcastRecipient,
+} from '@/types/whatsapp'
 
-const WA_API_VERSION = 'v19.0'
+const WA_API_VERSION = 'v23.0'
 const MAX_RETRIES    = 2
 const RETRY_DELAY_MS = 500
-
-// ─── Core send function ───────────────────────────────────────────────────────
 
 async function callWhatsAppAPI(
   payload: WASendTextRequest | WASendTemplateRequest
@@ -43,8 +44,6 @@ async function callWhatsAppAPI(
   return res.json() as Promise<WASendResponse>
 }
 
-// ─── Send text message (retry-safe) ──────────────────────────────────────────
-
 export async function sendWhatsAppText(
   to: string,
   body: string,
@@ -55,9 +54,14 @@ export async function sendWhatsAppText(
     sourceChannel?: SourceChannel
   } = {}
 ): Promise<SendMessageResult> {
+  if (!isMetaConfigured()) {
+    console.info('[WA Send] Meta not configured — send skipped (mock mode)')
+    return { success: false, error: 'not_configured' }
+  }
+
+  to = normalizePhone(to)
   const supabase = getSupabaseAdmin()
 
-  // Insert pending log first so we always have a record
   const { data: logRow } = await supabase
     .from('whatsapp_messages')
     .insert({
@@ -92,7 +96,6 @@ export async function sendWhatsAppText(
       const response = await callWhatsAppAPI(payload)
       const waMessageId = response.messages?.[0]?.id ?? null
 
-      // Update log with success
       if (logId) {
         await supabase
           .from('whatsapp_messages')
@@ -114,7 +117,6 @@ export async function sendWhatsAppText(
     }
   }
 
-  // All retries exhausted — mark failed
   if (logId) {
     await supabase
       .from('whatsapp_messages')
@@ -125,8 +127,6 @@ export async function sendWhatsAppText(
   console.error(`[WA Send] All retries failed for ${to}:`, lastError)
   return { success: false, error: lastError ?? 'Unknown error' }
 }
-
-// ─── Send template message ────────────────────────────────────────────────────
 
 export async function sendWhatsAppTemplate(
   to: string,
@@ -139,6 +139,12 @@ export async function sendWhatsAppTemplate(
     sourceChannel?: SourceChannel
   } = {}
 ): Promise<SendMessageResult> {
+  if (!isMetaConfigured()) {
+    console.info('[WA Send] Meta not configured — template send skipped (mock mode)')
+    return { success: false, error: 'not_configured' }
+  }
+
+  to = normalizePhone(to)
   const supabase = getSupabaseAdmin()
 
   const { data: logRow } = await supabase
@@ -189,4 +195,45 @@ export async function sendWhatsAppTemplate(
     }
     return { success: false, error: errMsg }
   }
+}
+
+export async function sendWhatsAppTemplateSimple(
+  to: string,
+  templateName: string,
+  params: TemplateParam[] = [],
+  opts: {
+    leadId?: string | null
+    conversationId?: string | null
+    sourceChannel?: SourceChannel
+  } = {}
+): Promise<SendMessageResult> {
+  const components: WASendTemplateRequest['template']['components'] =
+    params.length > 0
+      ? [{ type: 'body', parameters: params.map(p => ({ type: 'text', text: p.value })) }]
+      : []
+
+  return sendWhatsAppTemplate(to, templateName, 'en', components, opts)
+}
+
+export async function sendBroadcastCampaign(
+  recipients: BroadcastRecipient[],
+  templateName: string,
+  broadcastName: string
+): Promise<{ success: number; failed: number }> {
+  if (!isMetaConfigured()) {
+    console.info(`[WA Send] Meta not configured — broadcast "${broadcastName}" skipped (mock mode)`)
+    return { success: 0, failed: recipients.length }
+  }
+
+  let success = 0
+  let failed = 0
+
+  for (const r of recipients) {
+    const result = await sendWhatsAppTemplateSimple(r.whatsappNumber, templateName, r.customParams)
+    if (result.success) success++
+    else failed++
+    await new Promise(res => setTimeout(res, 120))
+  }
+
+  return { success, failed }
 }
