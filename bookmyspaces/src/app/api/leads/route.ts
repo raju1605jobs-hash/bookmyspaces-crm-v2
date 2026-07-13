@@ -7,6 +7,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets } from '@/lib/sheets'
 import { requireAuth } from '@/lib/auth-guard'
 import { parseBody, createLeadSchema, updateLeadSchema } from '@/lib/validation'
+import { resolveIdentity } from '@/lib/identity/resolve-identity'
 
 export async function GET(req: NextRequest) {
   const auth = await requireAuth()
@@ -49,6 +50,29 @@ export async function POST(req: NextRequest) {
 
   const supabaseAdmin = getSupabaseAdmin()
   try {
+    // V3 Day 2 — Identity Resolution (src/lib/identity/resolve-identity.ts),
+    // per master spec: "Never create duplicate customers." `leads.phone` has
+    // a UNIQUE constraint, so a phone match here means the insert below
+    // would fail anyway — previously that surfaced as an opaque 500
+    // ("Failed to create lead"). Returning the existing lead instead is a
+    // bug fix, not a new restriction: this route never successfully created
+    // a second lead with the same phone; it just failed ungracefully.
+    //
+    // An email-only match is lower confidence (leads.email is not unique,
+    // per architecture review) — per "if confidence is low, flag the record
+    // instead of merging automatically," this does NOT block or redirect
+    // creation. It still creates the new lead exactly as before, and
+    // attaches a note for human review instead of guessing.
+    const identity = await resolveIdentity({ phone: body.phone, email: body.email })
+
+    if (identity && identity.matchedOn === 'phone') {
+      logger.info('leads', 'POST resolved to existing lead by phone — not creating a duplicate', { leadId: identity.leadId })
+      const { data: existingLead } = await supabaseAdmin.from('leads').select('*').eq('id', identity.leadId).single()
+      return NextResponse.json({ lead: existingLead, duplicate: true, matchedOn: 'phone' }, { status: 200 })
+    }
+
+    const possibleDuplicateLeadId = identity && identity.matchedOn === 'email' ? identity.leadId : null
+
     const { data: lead, error } = await supabaseAdmin.from('leads').insert({
       name: body.name || null, phone: body.phone || null, email: body.email || null,
       event_type: body.event_type || null, event_date: body.event_date || null,
@@ -60,9 +84,18 @@ export async function POST(req: NextRequest) {
 
     if (error) throw error
 
-    await supabaseAdmin.from('activity_logs').insert({ lead_id: lead.id, action: 'lead_created', description: `Lead manually created from ${body.source || 'website'}`, performed_by: 'admin' })
+    await supabaseAdmin.from('activity_logs').insert({
+      lead_id: lead.id,
+      action: 'lead_created',
+      description: `Lead manually created from ${body.source || 'website'}`,
+      performed_by: 'admin',
+      ...(possibleDuplicateLeadId && { metadata: { possible_duplicate_of: possibleDuplicateLeadId, matched_on: 'email' } }),
+    })
     await syncLeadToSheets(lead)
-    return NextResponse.json({ lead }, { status: 201 })
+    return NextResponse.json({
+      lead,
+      ...(possibleDuplicateLeadId && { possibleDuplicateOf: possibleDuplicateLeadId }),
+    }, { status: 201 })
   } catch (error) {
     logger.error('leads', 'POST failed', error)
     return NextResponse.json({ error: 'Failed to create lead' }, { status: 500 })
