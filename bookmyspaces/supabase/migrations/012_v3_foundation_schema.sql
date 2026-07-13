@@ -37,12 +37,11 @@
 -- addon_services, reservations, reservation_addons, settings, ai_prompts,
 -- knowledge_sources, ai_interaction_log.
 --
--- Open decision this migration takes a position on (per Section 8's own
--- flag: "highest-leverage schema choice in this whole proposal"):
--- `customer_id` columns below reference `leads(id)`, following Section 8's
--- *recommended default* (extend `leads` rather than a parallel `customers`
--- table) — not a final decision. If you decide differently, these FKs are
--- the only places that need to change.
+-- DECISION CONFIRMED (Product Owner, 2026-07-13): `customer_id` columns
+-- below reference `leads(id)` — extend `leads`, no parallel `customers`
+-- table. This was Section 8's recommended default and is now final, not
+-- provisional. See audit/PHASE1_ARCHITECTURE_REVIEW_OMNICHANNEL.md "Open
+-- Decisions Needed Before Implementation Starts" #1 for the resolution.
 -- ═══════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────
