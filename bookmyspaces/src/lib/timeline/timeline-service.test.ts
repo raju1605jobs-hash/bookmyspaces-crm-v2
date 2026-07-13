@@ -110,4 +110,23 @@ describe('getCustomerTimeline', () => {
     const result = await getCustomerTimeline('lead-1')
     expect(result.entries.filter((e) => e.type === 'payment')).toEqual([])
   })
+
+  // V3 Sprint 4 — Priority 2: pins down the exact ai_interaction_log column
+  // contract this service depends on (lead_id, interaction_type, summary,
+  // created_at). Migration 012 originally shipped without those three
+  // columns — this test exists so that regressing the schema again would
+  // fail loudly here instead of silently degrading the timeline once the
+  // migration is actually applied to a live database.
+  it('surfaces ai_interaction_log rows using the interaction_type/summary column contract', async () => {
+    state.aiLog = [
+      { id: 'ai1', interaction_type: 'customer_summary', summary: 'Repeat guest, prefers rooftop venues.', created_at: '2026-07-13T12:00:00Z' },
+    ]
+
+    const result = await getCustomerTimeline('lead-1')
+
+    const aiEntry = result.entries.find((e) => e.type === 'ai_interaction')
+    expect(aiEntry).toBeDefined()
+    expect(aiEntry?.title).toBe('AI customer_summary')
+    expect(aiEntry?.description).toBe('Repeat guest, prefers rooftop venues.')
+  })
 })
