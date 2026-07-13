@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
+import Link from 'next/link';
 import {
   BarChart,
   Bar,
@@ -126,13 +127,21 @@ export default function RevenueDashboardPage() {
             Revenue = accepted proposals · <code className="text-xs bg-slate-100 rounded px-1">accepted_at IS NOT NULL</code>
           </p>
         </div>
-        <button
-          onClick={() => void load()}
-          disabled={loading}
-          className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-40"
-        >
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/dashboard/operations"
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50"
+          >
+            Operations Dashboard
+          </Link>
+          <button
+            onClick={() => void load()}
+            disabled={loading}
+            className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-40"
+          >
+            {loading ? 'Loading…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {/* ── Revenue KPIs ─────────────────────────────────────────────────── */}
