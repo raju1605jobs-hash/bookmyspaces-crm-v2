@@ -20,7 +20,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Building2, Calendar, Users, IndianRupee, Phone, Mail,
   MapPin, FileText, Receipt, CheckCircle2, XCircle, LogIn, LogOut,
-  RefreshCw, AlertTriangle, ExternalLink,
+  RefreshCw, AlertTriangle, ExternalLink, Sparkles,
 } from 'lucide-react'
 
 type ReservationStatus = 'inquiry' | 'tentative' | 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled' | 'no_show'
@@ -109,6 +109,9 @@ export default function ReservationDetailsPage({ params }: { params: { id: strin
   const [error, setError] = useState<string | null>(null)
   const [actionPending, setActionPending] = useState<StatusAction | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [generatingProposal, setGeneratingProposal] = useState(false)
+  const [proposalResult, setProposalResult] = useState<{ proposalNumber: string | null; totalPrice: number } | null>(null)
+  const [proposalError, setProposalError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -144,6 +147,21 @@ export default function ReservationDetailsPage({ params }: { params: { id: strin
       setActionError(err instanceof Error ? err.message : 'Action failed')
     } finally {
       setActionPending(null)
+    }
+  }
+
+  async function handleGenerateProposal() {
+    setGeneratingProposal(true)
+    setProposalError(null)
+    try {
+      const res = await fetch(`/api/reservations/${params.id}/proposal`, { method: 'POST' })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'Failed to generate proposal')
+      setProposalResult({ proposalNumber: json.proposalNumber, totalPrice: json.totalPrice })
+    } catch (err) {
+      setProposalError(err instanceof Error ? err.message : 'Failed to generate proposal')
+    } finally {
+      setGeneratingProposal(false)
     }
   }
 
@@ -254,20 +272,28 @@ export default function ReservationDetailsPage({ params }: { params: { id: strin
           </div>
         </div>
 
-        <div className="mt-4 pt-4 border-t border-gray-100 flex gap-4 text-sm">
-          {reservation.proposalId ? (
+        <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap items-center gap-4 text-sm">
+          {reservation.proposalId || proposalResult ? (
             <Link href="/proposals" className="inline-flex items-center gap-1.5 text-blue-600 hover:underline">
-              <FileText className="w-3.5 h-3.5" /> Linked proposal
+              <FileText className="w-3.5 h-3.5" />
+              {proposalResult?.proposalNumber ? `Proposal ${proposalResult.proposalNumber} created` : 'Linked proposal'}
             </Link>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-gray-400"><FileText className="w-3.5 h-3.5" /> No linked proposal</span>
+            <button
+              onClick={handleGenerateProposal}
+              disabled={generatingProposal}
+              className="inline-flex items-center gap-1.5 text-blue-600 hover:underline disabled:opacity-50"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> {generatingProposal ? 'Generating…' : 'Generate proposal from this reservation'}
+            </button>
           )}
           {reservation.invoiceId ? (
             <span className="inline-flex items-center gap-1.5 text-blue-600"><Receipt className="w-3.5 h-3.5" /> Invoice generated</span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-gray-400"><Receipt className="w-3.5 h-3.5" /> No invoice yet</span>
+            <span className="inline-flex items-center gap-1.5 text-gray-400"><Receipt className="w-3.5 h-3.5" /> Generate an invoice from the proposal once created (Proposals page)</span>
           )}
         </div>
+        {proposalError && <div className="mt-2 text-sm text-red-700">{proposalError}</div>}
       </div>
 
       {/* ── Status actions ──────────────────────────────────────────────── */}
