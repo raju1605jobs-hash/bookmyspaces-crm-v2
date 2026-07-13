@@ -32,7 +32,7 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 
-import { calculatePrice, createReservationWithQuote, confirmReservation, cancelReservation } from './reservation-workflow'
+import { calculatePrice, createReservationWithQuote, confirmReservation, cancelReservation, checkInReservation, checkOutReservation } from './reservation-workflow'
 
 const baseInput = {
   guestName: 'Priya Sharma',
@@ -144,6 +144,42 @@ describe('confirmReservation / cancelReservation', () => {
     mocks.transitionReservationStatus.mockResolvedValue({ ok: false, error: 'invalid_transition', from: 'checked_out', to: 'confirmed' })
 
     const result = await confirmReservation('res-1')
+
+    expect(result.ok).toBe(false)
+    expect(activityInserts).toHaveLength(0)
+  })
+})
+
+describe('checkInReservation / checkOutReservation', () => {
+  beforeEach(() => {
+    mocks.transitionReservationStatus.mockReset()
+    activityInserts.length = 0
+  })
+
+  it('checkInReservation transitions to checked_in and logs activity', async () => {
+    mocks.transitionReservationStatus.mockResolvedValue({ ok: true, reservation: { id: 'res-1', customerId: 'lead-1' } })
+
+    const result = await checkInReservation('res-1')
+
+    expect(mocks.transitionReservationStatus).toHaveBeenCalledWith('res-1', 'checked_in')
+    expect(result.ok).toBe(true)
+    expect(activityInserts[0]).toMatchObject({ action: 'reservation_checked_in', lead_id: 'lead-1' })
+  })
+
+  it('checkOutReservation transitions to checked_out and logs activity', async () => {
+    mocks.transitionReservationStatus.mockResolvedValue({ ok: true, reservation: { id: 'res-1', customerId: 'lead-1' } })
+
+    const result = await checkOutReservation('res-1')
+
+    expect(mocks.transitionReservationStatus).toHaveBeenCalledWith('res-1', 'checked_out')
+    expect(result.ok).toBe(true)
+    expect(activityInserts[0]).toMatchObject({ action: 'reservation_checked_out', lead_id: 'lead-1' })
+  })
+
+  it('does not log activity when a check-in/out transition is invalid', async () => {
+    mocks.transitionReservationStatus.mockResolvedValue({ ok: false, error: 'invalid_transition', from: 'inquiry', to: 'checked_in' })
+
+    const result = await checkInReservation('res-1')
 
     expect(result.ok).toBe(false)
     expect(activityInserts).toHaveLength(0)

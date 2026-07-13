@@ -167,4 +167,27 @@ export async function cancelReservation(reservationId: string, reason: string | 
   return result
 }
 
+// V3 Day 6 — Operator Experience sprint. The Reservation Details screen
+// needs check-in/check-out actions alongside confirm/cancel; added as the
+// same named-wrapper-plus-activity-log pattern rather than routes calling
+// transitionReservationStatus() directly and forgetting the CRM trail.
+
+/** Check In — named wrapper around the existing state machine (confirmed -> checked_in). */
+export async function checkInReservation(reservationId: string, crmLeadId?: string | null): Promise<TransitionResult> {
+  const result = await transitionReservationStatus(reservationId, 'checked_in')
+  if (result.ok) {
+    await logActivity(crmLeadId ?? result.reservation.customerId, 'reservation_checked_in', `Reservation ${reservationId} checked in`, { reservationId })
+  }
+  return result
+}
+
+/** Check Out — named wrapper around the existing state machine (checked_in -> checked_out). */
+export async function checkOutReservation(reservationId: string, crmLeadId?: string | null): Promise<TransitionResult> {
+  const result = await transitionReservationStatus(reservationId, 'checked_out')
+  if (result.ok) {
+    await logActivity(crmLeadId ?? result.reservation.customerId, 'reservation_checked_out', `Reservation ${reservationId} checked out`, { reservationId })
+  }
+  return result
+}
+
 export type { AvailabilityCheckResult }
