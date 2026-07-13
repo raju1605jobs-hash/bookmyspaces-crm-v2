@@ -494,33 +494,28 @@ CREATE POLICY "knowledge_sources_service_role_all" ON knowledge_sources
 
 -- ─────────────────────────────────────────
 -- AI_INTERACTION_LOG
+--
+-- Sprint 4 fix (caught during the end-to-end workflow trace, before this
+-- migration was ever applied): src/lib/timeline/timeline-service.ts's
+-- fetchAIInteractionEntries() has queried `.eq('lead_id', leadId)` and
+-- selected `interaction_type, summary` since Day 4 — but this table
+-- originally had neither a `lead_id` column nor those two columns, only
+-- `conversation_id`. That would have compiled fine and passed every mocked
+-- test (the test file stubs table access generically, not real column
+-- names — see timeline-service.test.ts), then failed with a real Postgres
+-- "column does not exist" error the first time this ran against a live
+-- database, permanently degrading the `ai_interaction` timeline entry type.
+-- Fixed here, in the schema, since it isn't live anywhere yet — no ALTER
+-- migration needed. `lead_id` is a direct per-customer link (same
+-- convention as reservations.customer_id / proposals.lead_id) because the
+-- consuming query needs to look up by customer directly, not only via a
+-- specific conversation. `interaction_type`/`summary` are what Priority 4's
+-- AI Assistant features (Customer Summary, Suggested Reply, etc.) will
+-- write here.
 -- ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS ai_interaction_log (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   created_at TIMESTAMPTZ DEFAULT NOW(),
 
-  conversation_id UUID REFERENCES unified_conversations(id) ON DELETE SET NULL,
-  confidence_score NUMERIC(4,3),
-  escalated BOOLEAN DEFAULT FALSE,
-  escalation_reason TEXT,
-  response_time_ms INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_ai_interaction_log_conversation_id ON ai_interaction_log(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_ai_interaction_log_escalated ON ai_interaction_log(escalated);
-
-ALTER TABLE ai_interaction_log ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "ai_interaction_log_service_role_all" ON ai_interaction_log;
-CREATE POLICY "ai_interaction_log_service_role_all" ON ai_interaction_log
-  FOR ALL USING (auth.role() = 'service_role');
-
--- ─────────────────────────────────────────
--- SEED: the two known properties, so this migration is immediately usable
--- rather than leaving `properties` empty. Slugs match what
--- src/types/reservation.ts's PropertySlug type expects.
--- ─────────────────────────────────────────
-INSERT INTO properties (name, slug, is_active)
-VALUES
-  ('Skyline Serenity', 'skyline-serenity', TRUE),
-  ('Monurama Homestay', 'monurama-homestay', TRUE)
-ON CONFLICT (slug) DO NOTHING;
+  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES unified_conversations
