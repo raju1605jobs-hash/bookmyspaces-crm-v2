@@ -208,6 +208,12 @@ function ReservationDashboardContent() {
           <p className="text-sm text-gray-500 mt-0.5">Arrivals, departures, and reservation pipeline at a glance.</p>
         </div>
         <div className="flex gap-2">
+          <Link
+            href="/reservations/calendar"
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 border border-gray-200"
+          >
+            <Calendar className="w-3.5 h-3.5" /> Calendar
+          </Link>
           <button
             onClick={load}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-100 border border-gray-200"
