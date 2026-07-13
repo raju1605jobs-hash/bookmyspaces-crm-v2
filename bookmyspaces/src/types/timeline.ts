@@ -1,0 +1,30 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// FILE: src/types/timeline.ts
+// V3 Day 4 — Priority 5 (Customer Timeline). Contracts only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TimelineEntryType =
+  | 'chat'
+  | 'whatsapp'
+  | 'email'
+  | 'lead_activity'
+  | 'reservation'
+  | 'proposal'
+  | 'payment'
+  | 'follow_up'
+  | 'ai_interaction'
+
+export interface TimelineEntry {
+  type: TimelineEntryType
+  timestamp: string
+  title: string
+  description: string | null
+  metadata: Record<string, unknown>
+}
+
+export interface CustomerTimeline {
+  leadId: string
+  entries: TimelineEntry[]
+  /** Sources backed by not-yet-applied migration 012/013 tables (reservations, ai_interaction_log) — degraded, not thrown, when unavailable. */
+  degraded: Partial<Record<TimelineEntryType, boolean>>
+}

@@ -1,0 +1,113 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+
+const state = {
+  conversations: [] as Record<string, unknown>[],
+  whatsappMessages: [] as Record<string, unknown>[],
+  emailLog: [] as Record<string, unknown>[],
+  activityLogs: [] as Record<string, unknown>[],
+  proposals: [] as Record<string, unknown>[],
+  invoices: [] as Record<string, unknown>[],
+  reservations: [] as Record<string, unknown>[],
+  reservationsError: null as { message: string } | null,
+  aiLog: [] as Record<string, unknown>[],
+  aiLogError: null as { message: string } | null,
+}
+
+function resetState() {
+  state.conversations = []
+  state.whatsappMessages = []
+  state.emailLog = []
+  state.activityLogs = []
+  state.proposals = []
+  state.invoices = []
+  state.reservations = []
+  state.reservationsError = null
+  state.aiLog = []
+  state.aiLogError = null
+}
+
+vi.mock('@/lib/supabase', () => ({
+  getSupabaseAdmin: () => ({
+    from: (table: string) => {
+      const chain = (data: unknown, error: unknown = null) => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({ order: () => ({ limit: () => Promise.resolve({ data, error }) }) }), // email_log (2 eqs)
+            order: () => ({ limit: () => Promise.resolve({ data, error }) }),
+          }),
+          in: () => ({ order: () => ({ limit: () => Promise.resolve({ data, error }) }) }),
+        }),
+      })
+
+      switch (table) {
+        case 'conversations': return chain(state.conversations)
+        case 'whatsapp_messages': return chain(state.whatsappMessages)
+        case 'email_log': return chain(state.emailLog)
+        case 'activity_logs': return chain(state.activityLogs)
+        case 'proposals': return chain(state.proposals)
+        case 'invoices': return chain(state.invoices)
+        case 'reservations': return chain(state.reservations, state.reservationsError)
+        case 'ai_interaction_log': return chain(state.aiLog, state.aiLogError)
+        default: throw new Error(`unexpected table: ${table}`)
+      }
+    },
+  }),
+}))
+
+import { getCustomerTimeline } from './timeline-service'
+
+describe('getCustomerTimeline', () => {
+  beforeEach(resetState)
+
+  it('returns an empty timeline with no degraded sources when nothing exists', async () => {
+    const result = await getCustomerTimeline('lead-1')
+    expect(result).toEqual({ leadId: 'lead-1', entries: [], degraded: {} })
+  })
+
+  it('merges every live source into one chronologically-sorted (newest first) list', async () => {
+    state.conversations = [{ id: 'c1', channel: 'whatsapp', updated_at: '2026-07-10T10:00:00Z', is_active: false }]
+    state.whatsappMessages = [{ id: 'w1', direction: 'inbound', message_type: 'text', message_text: 'Hi', message_status: 'received', created_at: '2026-07-12T09:00:00Z' }]
+    state.emailLog = [{ id: 'e1', subject: 'Your Proposal', template_type: 'proposal', to_email: 'a@b.com', created_at: '2026-07-11T08:00:00Z' }]
+    state.activityLogs = [
+      { id: 'a1', action: 'status_changed', description: 'Status updated', created_at: '2026-07-13T07:00:00Z', performed_by: 'admin' },
+      { id: 'a2', action: 'followup_sent', description: 'WhatsApp follow-up sent', created_at: '2026-07-09T07:00:00Z', performed_by: 'system' },
+    ]
+    state.proposals = [{ id: 'p1', proposal_number: 'BMS-1', package_name: 'Gold', total_price: 50000, status: 'sent', created_at: '2026-07-08T06:00:00Z' }]
+    state.invoices = [{ id: 'i1', invoice_number: 'INV-1', total_amount: 50000, advance_received: 15000, balance_due: 35000, status: 'partial', paid_at: '2026-07-14T00:00:00Z', created_at: '2026-07-08T06:30:00Z' }]
+
+    const result = await getCustomerTimeline('lead-1')
+
+    expect(result.degraded).toEqual({})
+    expect(result.entries).toHaveLength(7)
+    // Newest first: invoice paid_at (07-14) should be first
+    expect(result.entries[0].type).toBe('payment')
+    expect(result.entries[0].timestamp).toBe('2026-07-14T00:00:00Z')
+    // Last should be the oldest entry (proposal at 07-08)
+    expect(result.entries.at(-1)?.type).toBe('proposal')
+
+    const types = result.entries.map((e) => e.type)
+    expect(types).toContain('chat')
+    expect(types).toContain('whatsapp')
+    expect(types).toContain('email')
+    expect(types).toContain('lead_activity')
+    expect(types).toContain('proposal')
+  })
+
+  it('marks reservation and ai_interaction degraded on error without failing the whole timeline', async () => {
+    state.reservationsError = { message: 'relation "reservations" does not exist' }
+    state.aiLogError = { message: 'relation "ai_interaction_log" does not exist' }
+    state.conversations = [{ id: 'c1', channel: 'website_chat', updated_at: '2026-07-10T10:00:00Z', is_active: true }]
+
+    const result = await getCustomerTimeline('lead-1')
+
+    expect(result.degraded).toEqual({ reservation: true, ai_interaction: true })
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0].type).toBe('chat')
+  })
+
+  it('does not query invoices when the customer has no proposals', async () => {
+    state.proposals = []
+    const result = await getCustomerTimeline('lead-1')
+    expect(result.entries.filter((e) => e.type === 'payment')).toEqual([])
+  })
+})
