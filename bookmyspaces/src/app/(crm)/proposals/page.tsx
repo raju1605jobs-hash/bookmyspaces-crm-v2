@@ -176,7 +176,7 @@ function ModalShell({title,sub,onClose,children}:{
             <p className="text-xs text-gray-400 mb-0.5">{sub}</p>
             <p className="text-sm font-bold">{title}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-white/10 transition-colors">
             <X className="w-4 h-4"/>
           </button>
         </div>
@@ -224,7 +224,7 @@ function PaymentModal({
             <p className="text-xs text-gray-400 mb-0.5">Record Payment</p>
             <p className="text-sm font-bold">{proposal.client_name} · {proposal.proposal_number}</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"><X className="w-4 h-4"/></button>
+          <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-lg hover:bg-white/10 transition-colors"><X className="w-4 h-4"/></button>
         </div>
         <form onSubmit={submit} className="p-5 space-y-4">
           {error&&<div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">{error}</div>}

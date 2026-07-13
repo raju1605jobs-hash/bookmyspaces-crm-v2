@@ -219,7 +219,7 @@ function CreateModal({
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
           <h2 className="text-lg font-semibold text-gray-900">New Campaign</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700">
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-gray-700">
             <XCircle className="w-5 h-5" />
           </button>
         </div>
