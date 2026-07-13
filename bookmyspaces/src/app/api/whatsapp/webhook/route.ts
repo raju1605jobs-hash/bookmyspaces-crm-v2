@@ -5,6 +5,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { sendWhatsAppText }          from '@/lib/whatsapp/send-message'
 import { getSupabaseAdmin }          from '@/lib/supabase'
 import { verifySignature }           from '@/lib/whatsapp/verify-signature'
+import { handleInboundMessage, recordMessage } from '@/lib/conversations/unified-conversation-service'
 
 export const dynamic    = 'force-dynamic'
 export const runtime    = 'nodejs'
@@ -110,10 +111,52 @@ async function handleIncomingMessage(
       await sendWhatsAppText(from, reply)
 
       await persistConversation(from, senderName, text, reply)
+
+      // V3 Day 5 — mirror this exchange into the Unified Conversation
+      // Platform (Day 4's handleInboundMessage pipeline) alongside the
+      // legacy `conversations` write above, which stays canonical for the
+      // live CRM UI until a real cutover. Fire-and-forget and fully
+      // isolated: a failure here (e.g. migration 012 not yet applied in
+      // this environment) must never affect the WhatsApp reply already
+      // sent, so it's caught here rather than by the outer try/catch.
+      syncToUnifiedConversationPlatform(from, text, reply, message.id).catch(err => {
+        console.error(`[WA Webhook] Unified Conversation Platform sync failed for ${from} (non-fatal):`, err)
+      })
     }
   } catch (err) {
     console.error(`[WA Webhook] Error handling message from ${from}:`, err)
   }
+}
+
+// ─── Unified Conversation Platform sync (Day 5) ────────────────────────────
+// Best-effort mirror of every inbound/outbound WhatsApp message into the V3
+// Unified Conversation Platform (channels / unified_conversations /
+// unified_messages — migration 012), via the same handleInboundMessage()
+// pipeline Day 4 built and unit-tested. This is additive, not a
+// replacement: persistConversation() above keeps writing the live
+// `conversations` table the current CRM UI reads from. Errors surface as a
+// single caught rejection to the caller, never as a webhook failure —
+// safe to run whether or not migration 012 has been applied yet.
+async function syncToUnifiedConversationPlatform(
+  phone:              string,
+  inbound:            string,
+  outbound:           string,
+  externalMessageId:  string
+): Promise<void> {
+  const result = await handleInboundMessage({
+    channelType:        'whatsapp',
+    channelIdentity:    phone,
+    content:            inbound,
+    externalMessageId,
+  })
+
+  await recordMessage({
+    conversationId: result.conversationId,
+    channelId:      result.channelId,
+    direction:      'outbound',
+    senderType:     'ai',
+    content:        outbound,
+  })
 }
 
 async function persistConversation(
