@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSupabaseAdmin } from '@/lib/supabase'
-import { isValidReservationTransition, type Reservation, type ReservationStatus } from '@/types/reservation'
+import { isValidReservationTransition, type Reservation, type ReservationStatus, type InventoryType } from '@/types/reservation'
 import { checkAvailability } from './availability-service'
 
 export interface CreateReservationInput {
@@ -114,6 +114,81 @@ export async function transitionReservationStatus(reservationId: string, toStatu
   if (error || !data) return { ok: false, error: 'db_error', message: error?.message ?? 'Unknown error updating reservation' }
 
   return { ok: true, reservation: mapRow(data) }
+}
+
+// ─── Read paths: Reservation Dashboard / Reservation Details (Day 6) ───────
+// The dashboard and details screens need property/inventory names alongside
+// the reservation itself — added here (one query shape, one place) rather
+// than as ad-hoc joins scattered across route files.
+
+export interface ReservationWithJoins extends Reservation {
+  propertyName: string
+  inventoryName: string
+  inventoryType: InventoryType | null
+}
+
+function mapRowWithJoins(row: Record<string, any>): ReservationWithJoins {
+  const property = Array.isArray(row.properties) ? row.properties[0] : row.properties
+  const inventoryItem = Array.isArray(row.inventory_items) ? row.inventory_items[0] : row.inventory_items
+
+  return {
+    ...mapRow(row),
+    propertyName: property?.name ?? 'Unknown property',
+    inventoryName: inventoryItem?.name ?? 'Unknown inventory',
+    inventoryType: inventoryItem?.inventory_type ?? null,
+  }
+}
+
+export interface ListReservationsFilters {
+  status?: ReservationStatus[]
+  checkInFrom?: string
+  checkInTo?: string
+  checkOutFrom?: string
+  checkOutTo?: string
+  propertyId?: string
+  limit?: number
+}
+
+/**
+ * Lists reservations (most imminent check-in first) with their property and
+ * inventory item name/type joined in, for the Reservation Dashboard and
+ * Calendar. Every filter is optional and additive (AND'd together) — the
+ * dashboard composes these into "today's arrivals", "pending confirmations",
+ * etc. rather than this function knowing about dashboard-specific concepts.
+ */
+export async function listReservations(filters: ListReservationsFilters = {}): Promise<ReservationWithJoins[]> {
+  const supabase = getSupabaseAdmin()
+
+  let query = supabase
+    .from('reservations')
+    .select('*, properties(name), inventory_items(name, inventory_type)')
+    .order('check_in_date', { ascending: true })
+    .limit(filters.limit ?? 200)
+
+  if (filters.status && filters.status.length > 0) query = query.in('status', filters.status)
+  if (filters.propertyId) query = query.eq('property_id', filters.propertyId)
+  if (filters.checkInFrom) query = query.gte('check_in_date', filters.checkInFrom)
+  if (filters.checkInTo) query = query.lte('check_in_date', filters.checkInTo)
+  if (filters.checkOutFrom) query = query.gte('check_out_date', filters.checkOutFrom)
+  if (filters.checkOutTo) query = query.lte('check_out_date', filters.checkOutTo)
+
+  const { data, error } = await query
+  if (error || !data) return []
+  return data.map(mapRowWithJoins)
+}
+
+/** Single reservation with the same property/inventory joins, for the Reservation Details screen. */
+export async function getReservationById(id: string): Promise<ReservationWithJoins | null> {
+  const supabase = getSupabaseAdmin()
+
+  const { data, error } = await supabase
+    .from('reservations')
+    .select('*, properties(name), inventory_items(name, inventory_type)')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (error || !data) return null
+  return mapRowWithJoins(data)
 }
 
 function mapRow(row: Record<string, any>): Reservation {

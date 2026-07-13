@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSupabaseAdmin } from '@/lib/supabase'
-import type { Property } from '@/types/reservation'
+import type { Property, InventoryItem } from '@/types/reservation'
 
 function mapRow(row: {
   id: string; name: string; slug: string; address: string | null; city: string | null
@@ -61,4 +61,59 @@ export async function getPropertyBySlug(slug: string): Promise<Property | null> 
 
   if (error || !data) return null
   return mapRow(data)
+}
+
+// ─── Inventory items ─────────────────────────────────────────────────────────
+// V3 Day 6 — Operator Experience sprint. Reservation Dashboard/Calendar and
+// the "create a reservation" flow both need a list of bookable inventory
+// (rooms/suites/banquet halls/etc.) with their parent property's name —
+// added here, not as an ad-hoc query in a route file, so the one Supabase
+// query for this shape lives in the same service layer as everything else
+// touching `inventory_items`/`properties`.
+
+export interface InventoryItemWithProperty extends InventoryItem {
+  propertyName: string
+  propertySlug: string
+}
+
+function mapInventoryRow(row: {
+  id: string; property_id: string; inventory_type: InventoryItem['inventoryType']; name: string
+  description: string | null; max_occupancy: number | null; base_capacity: number | null; is_active: boolean
+  properties: { name: string; slug: string } | { name: string; slug: string }[] | null
+}): InventoryItemWithProperty {
+  const property = Array.isArray(row.properties) ? row.properties[0] : row.properties
+
+  return {
+    id: row.id,
+    propertyId: row.property_id,
+    inventoryType: row.inventory_type,
+    name: row.name,
+    description: row.description,
+    maxOccupancy: row.max_occupancy,
+    baseCapacity: row.base_capacity,
+    isActive: row.is_active,
+    propertyName: property?.name ?? 'Unknown property',
+    propertySlug: property?.slug ?? '',
+  }
+}
+
+/**
+ * Active bookable inventory (rooms, suites, banquet halls, etc.) across all
+ * properties, or scoped to one property. Used by the Reservation Dashboard's
+ * "new reservation" flow and the Reservation Calendar, both of which need to
+ * show what can be booked before a customer/date range is even chosen.
+ */
+export async function listActiveInventoryItems(propertyId?: string): Promise<InventoryItemWithProperty[]> {
+  const supabase = getSupabaseAdmin()
+  let query = supabase
+    .from('inventory_items')
+    .select('*, properties(name, slug)')
+    .eq('is_active', true)
+    .order('name', { ascending: true })
+
+  if (propertyId) query = query.eq('property_id', propertyId)
+
+  const { data, error } = await query
+  if (error || !data) return []
+  return data.map(mapInventoryRow)
 }

@@ -7,6 +7,27 @@ const state = {
   currentStatus: 'inquiry' as string | null,
   updatedRow: null as Record<string, unknown> | null,
   updateError: null as { message: string } | null,
+  joinedRows: [] as Array<Record<string, unknown>>,
+  joinedSingleRow: null as Record<string, unknown> | null,
+}
+
+/** A chainable query-builder stub: every filter method returns `this` so any
+ * combination the real code calls (`.in()`, `.eq()`, `.gte()`, `.lte()`,
+ * `.order()`, `.limit()`) works, and it resolves (is `then`-able) to the
+ * configured joined rows — mirroring how supabase-js's real builder behaves. */
+function makeJoinedListBuilder() {
+  const builder: any = {
+    in: () => builder,
+    eq: () => builder,
+    gte: () => builder,
+    lte: () => builder,
+    order: () => builder,
+    limit: () => builder,
+    maybeSingle: () => Promise.resolve({ data: state.joinedSingleRow, error: null }),
+    then: (resolve: (v: { data: unknown; error: null }) => void) =>
+      resolve({ data: state.joinedRows, error: null }),
+  }
+  return builder
 }
 
 vi.mock('@/lib/supabase', () => ({
@@ -15,6 +36,10 @@ vi.mock('@/lib/supabase', () => ({
       if (table !== 'reservations') throw new Error(`unexpected table: ${table}`)
       return {
         select: (cols: string) => {
+          // listReservations/getReservationById: select('*, properties(name), inventory_items(...)')
+          if (cols.includes('properties(name)')) {
+            return makeJoinedListBuilder()
+          }
           // availability check path: select(...).eq(...).in(...).lt(...).gt(...)
           if (cols.includes('check_in_date') && cols.includes('check_out_date') && !cols.includes('status')) {
             return { eq: () => ({ in: () => ({ lt: () => ({ gt: () => Promise.resolve({ data: state.existingReservations, error: null }) }) }) }) }
@@ -42,7 +67,7 @@ vi.mock('@/lib/supabase', () => ({
   }),
 }))
 
-import { createReservation, transitionReservationStatus } from './reservation-service'
+import { createReservation, transitionReservationStatus, listReservations, getReservationById } from './reservation-service'
 
 const baseInput = {
   guestName: 'Priya Sharma',
@@ -140,5 +165,60 @@ describe('transitionReservationStatus', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('not_found')
+  })
+})
+
+describe('listReservations', () => {
+  beforeEach(() => { state.joinedRows = [] })
+
+  it('maps joined property/inventory names onto each reservation', async () => {
+    state.joinedRows = [{
+      ...baseRow,
+      properties: { name: 'Skyline Serenity' },
+      inventory_items: { name: 'Deluxe Room 101', inventory_type: 'room' },
+    }]
+
+    const result = await listReservations()
+
+    expect(result).toHaveLength(1)
+    expect(result[0].propertyName).toBe('Skyline Serenity')
+    expect(result[0].inventoryName).toBe('Deluxe Room 101')
+    expect(result[0].inventoryType).toBe('room')
+    expect(result[0].guestName).toBe('Priya Sharma')
+  })
+
+  it('falls back gracefully when a join is missing', async () => {
+    state.joinedRows = [{ ...baseRow, properties: null, inventory_items: null }]
+
+    const result = await listReservations()
+
+    expect(result[0].propertyName).toBe('Unknown property')
+    expect(result[0].inventoryName).toBe('Unknown inventory')
+    expect(result[0].inventoryType).toBeNull()
+  })
+
+  it('returns an empty array when there are no reservations', async () => {
+    expect(await listReservations()).toEqual([])
+  })
+})
+
+describe('getReservationById', () => {
+  beforeEach(() => { state.joinedSingleRow = null })
+
+  it('returns the joined reservation when found', async () => {
+    state.joinedSingleRow = {
+      ...baseRow,
+      properties: { name: 'Skyline Serenity' },
+      inventory_items: { name: 'Deluxe Room 101', inventory_type: 'room' },
+    }
+
+    const result = await getReservationById('res-1')
+
+    expect(result?.propertyName).toBe('Skyline Serenity')
+    expect(result?.id).toBe('res-1')
+  })
+
+  it('returns null when not found', async () => {
+    expect(await getReservationById('missing-id')).toBeNull()
   })
 })
