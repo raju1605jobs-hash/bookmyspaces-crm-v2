@@ -21,6 +21,7 @@ import {
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets, initializeSheet } from '@/lib/sheets'
 import { logger } from '@/lib/logger'
+import { handleInboundMessage, recordMessage } from '@/lib/conversations/unified-conversation-service'
 
 export async function POST(req: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin()
@@ -169,6 +170,17 @@ export async function POST(req: NextRequest) {
         .catch(() => {})
     }
 
+    // V3 Day 5 — mirror this exchange into the Unified Conversation
+    // Platform (Day 4's handleInboundMessage pipeline), additive alongside
+    // the `conversations` table writes above which stay canonical for the
+    // live CRM UI until a real cutover. Fire-and-forget and fully
+    // isolated: a failure here (e.g. migration 012 not yet applied in this
+    // environment) must never affect the reply already computed for the
+    // customer.
+    syncToUnifiedConversationPlatform(sessionId, trimmedMessage, aiResponseClean, reqId).catch(err => {
+      logger.error('chat', `[${reqId}] Unified Conversation Platform sync failed (non-fatal)`, err)
+    })
+
     return NextResponse.json({ reply: aiResponseClean, sessionId, leadCaptured: hasLead })
 
   } catch (error) {
@@ -182,6 +194,39 @@ export async function POST(req: NextRequest) {
       { status: 500 }
     )
   }
+}
+
+// ─── Unified Conversation Platform sync (Day 5) ────────────────────────────
+// Best-effort mirror of every website-chat exchange into the V3 Unified
+// Conversation Platform (channels / unified_conversations /
+// unified_messages — migration 012), via the same handleInboundMessage()
+// pipeline Day 4 built and unit-tested. `sessionId` is passed as the
+// website_chat channel identity per handleInboundMessage's documented
+// contract; identity resolution against `leads.phone`/`leads.email` only
+// succeeds once a phone/email has actually been extracted onto the lead
+// elsewhere in this request — until then it degrades to an unidentified
+// conversation, which is expected, not an error. Errors surface as a
+// single caught rejection to the caller, never as a chat-API failure.
+async function syncToUnifiedConversationPlatform(
+  sessionId: string,
+  inbound:   string,
+  outbound:  string,
+  reqId:     string
+): Promise<void> {
+  const result = await handleInboundMessage({
+    channelType:       'website_chat',
+    channelIdentity:   sessionId,
+    content:           inbound,
+    externalMessageId: reqId,
+  })
+
+  await recordMessage({
+    conversationId: result.conversationId,
+    channelId:      result.channelId,
+    direction:      'outbound',
+    senderType:     'ai',
+    content:        outbound,
+  })
 }
 
 function normalizePhoneForDedup(raw: string | null | undefined): string | null {
