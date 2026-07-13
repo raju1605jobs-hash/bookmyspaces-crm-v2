@@ -443,7 +443,7 @@ function NewReservationModal({
       <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h3 className="text-base font-semibold text-gray-900">New Reservation</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-700">
+          <button onClick={onClose} aria-label="Close" className="text-gray-400 hover:text-gray-700">
             <X className="w-5 h-5" />
           </button>
         </div>
