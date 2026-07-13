@@ -419,10 +419,8 @@ Service          Service         Service          (existing, extended   Service
 
 ## Open Decisions Needed Before Implementation Starts
 
-1. **`leads` extended vs. new `customers` table** (Section 8) -- recommendation is extend `leads`, but this is the user's call and the highest-leverage decision in this whole plan.
-2. ~~**Git repository status**~~ -- **RESOLVED 2026-07-13**, see Section 13 risk table. However, a new critical PII-in-pushed-history finding surfaced during the repair and now blocks in its place -- see Morning Handover Report for the decision needed.
+1. ~~**`leads` extended vs. new `customers` table**~~ -- **RESOLVED 2026-07-13 (Product Owner).** Confirmed: extend `leads`, no new `customers` table. Migration 012's FKs already implemented this as the default; now locked in as final. See `supabase/migrations/012_v3_foundation_schema.sql` header.
+2. ~~**Git repository status**~~ -- **RESOLVED 2026-07-13**, see Section 13 risk table. PII-in-pushed-history finding (commit `43b6a15`) surfaced during the repair -- **remediation plan confirmed 2026-07-13 (Product Owner): contain (repo private) + rotate token + purge history.** See `audit/PII_REMEDIATION_PLAN.md` for exact steps (execution requires GitHub credentials not available in-sandbox).
 3. **LinkedIn and Google Business Profile API access** -- confirm feasibility before these phases are scheduled, not after.
 4. **`activity_logs`/`activity_events`/`analytics_events` consolidation** (Section 8) -- recommend consolidating rather than adding a 4th table, but flagging as a decision point, not assuming.
-5. **Phasing order** -- Section 11's order (Settings -> Unified Conversations on WhatsApp first -> AI Orchestrator -> Reservations in parallel) is a recommendation based on dependency chains and risk (proving the pattern on the highest-traffic channel first); confirm this matches priorities before work begins.
-
-**Waiting for approval and decisions on the above before any implementation work starts, per instruction.**
+5. **Phasing order** -- Section 11's order (Settings -> Unified Conversations on WhatsApp first -> AI Orchestrator -> Reservations in parallel) is a recommen
