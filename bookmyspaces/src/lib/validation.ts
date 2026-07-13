@@ -102,3 +102,42 @@ export const leadStageBodySchema = z.object({
   reason: z.string().trim().max(500).optional(),
   force : z.boolean().optional(),
 })
+
+// ─── Reservations (V3 Day 6 — Operator Experience sprint) ──────────────────
+// Same "validate before touching the database" rule as leads above, applied
+// to the new Reservation API routes exposing Day 2/4's reservation-workflow.ts.
+
+const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'must be a YYYY-MM-DD date')
+
+export const checkAvailabilitySchema = z.object({
+  inventoryItemId: uuid,
+  checkInDate    : isoDate,
+  checkOutDate   : isoDate,
+  roomCount      : z.number().int().positive().max(50).nullish(),
+})
+
+export const createReservationSchema = z.object({
+  customerId     : uuid.nullish(),
+  guestName      : z.string().trim().min(1).max(200),
+  guestMobile    : z.string().trim().min(6).max(20).nullish(),
+  guestEmail     : z.string().trim().email().nullish().or(z.literal('')),
+  propertyId     : uuid,
+  inventoryItemId: uuid,
+  checkInDate    : isoDate,
+  checkOutDate   : isoDate,
+  adults         : z.number().int().positive().max(50).nullish(),
+  children       : z.number().int().min(0).max(50).nullish(),
+  roomCount      : z.number().int().positive().max(50).nullish(),
+  bookingSource  : z.enum([
+    'direct', 'website', 'whatsapp', 'phone', 'walk_in', 'referral',
+    'booking_com', 'agoda', 'expedia', 'airbnb', 'other',
+  ]).nullish(),
+  specialRequests: z.string().trim().max(2000).nullish(),
+  crmLeadId      : uuid.nullish(),
+})
+
+export const reservationStatusActionSchema = z.object({
+  action   : z.enum(['confirm', 'cancel', 'check_in', 'check_out']),
+  reason   : z.string().trim().max(500).nullish(),
+  crmLeadId: uuid.nullish(),
+})
