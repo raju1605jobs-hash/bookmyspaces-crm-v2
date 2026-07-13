@@ -2,9 +2,9 @@
 // Meta Cloud API webhook — verification + inbound message handling
 
 import { NextRequest, NextResponse } from 'next/server'
-import crypto                        from 'crypto'
 import { sendWhatsAppMessage }       from '@/lib/whatsapp'
 import { getSupabaseAdmin }          from '@/lib/supabase'
+import { verifySignature }           from '@/lib/whatsapp/verify-signature'
 
 export const dynamic    = 'force-dynamic'
 export const runtime    = 'nodejs'
@@ -45,38 +45,12 @@ export async function GET(request: NextRequest) {
 }
 
 // ─── Signature verification ───────────────────────────────────
-// ISS-004 (audit/MASTER_ISSUE_REGISTER.csv): the POST handler previously had no
-// signature/HMAC verification at all — anyone who discovered the webhook URL
-// could forge inbound messages. Meta signs every webhook POST body with
-// HMAC-SHA256 using the app's secret (X-Hub-Signature-256: sha256=<hex>).
+// ISS-004 (audit/MASTER_ISSUE_REGISTER.csv): moved to
+// src/lib/whatsapp/verify-signature.ts (V3 Day 2) so the Provider Framework's
+// WhatsAppMessagingProvider adapter can reuse the exact same check instead of
+// duplicating it. Behavior here is unchanged — same 3-state result, same
+// "unconfigured" flag-first rollout (RISK_REGISTER.md).
 //
-// Rollout note (per RISK_REGISTER.md's own recommendation for this issue —
-// "can ship signature check behind a flag that logs-but-doesn't-reject
-// first"): WHATSAPP_APP_SECRET is a NEW env var, not yet in .env.example/
-// .env.local. Until it's configured, verification is skipped (logged once)
-// rather than rejecting all traffic — this matches today's exact behavior,
-// so deploying this code alone changes nothing until the secret is set.
-// Once WHATSAPP_APP_SECRET is present, invalid/forged signatures are
-// rejected with 403 and never reach handleIncomingMessage().
-function verifySignature(rawBody: string, signatureHeader: string | null): 'valid' | 'invalid' | 'unconfigured' {
-  const appSecret = process.env.WHATSAPP_APP_SECRET
-  if (!appSecret) return 'unconfigured'
-
-  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return 'invalid'
-
-  const expected = crypto
-    .createHmac('sha256', appSecret)
-    .update(rawBody, 'utf8')
-    .digest('hex')
-  const provided = signatureHeader.slice('sha256='.length)
-
-  const expectedBuf = Buffer.from(expected, 'hex')
-  const providedBuf = Buffer.from(provided, 'hex')
-  if (expectedBuf.length !== providedBuf.length) return 'invalid'
-
-  return crypto.timingSafeEqual(expectedBuf, providedBuf) ? 'valid' : 'invalid'
-}
-
 // ─── POST — Incoming messages & status updates ────────────────
 // Always return 200 — a non-200 causes Meta to retry for 72 hours.
 export async function POST(request: NextRequest) {
