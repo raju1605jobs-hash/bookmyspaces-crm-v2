@@ -474,6 +474,15 @@ CREATE TABLE IF NOT EXISTS knowledge_sources (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_sources_category ON knowledge_sources(category);
 
+-- Vector similarity index — without this, similarity search on `embedding`
+-- is a full table scan, which defeats the point of using pgvector here.
+-- Same index type/ops as the existing knowledge_chunks.embedding column
+-- (see migrations/001_initial_schema.sql:175-176), found missing during the
+-- Day 2 database review. Caught before this migration is ever applied, so
+-- fixed in place rather than added as a follow-up migration.
+CREATE INDEX IF NOT EXISTS idx_knowledge_sources_embedding
+  ON knowledge_sources USING hnsw (embedding vector_cosine_ops);
+
 DROP TRIGGER IF EXISTS update_knowledge_sources_updated_at ON knowledge_sources;
 CREATE TRIGGER update_knowledge_sources_updated_at
   BEFORE UPDATE ON knowledge_sources
