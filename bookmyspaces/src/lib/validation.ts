@@ -143,3 +143,13 @@ export const reservationStatusActionSchema = z.object({
   reason   : z.string().trim().max(500).nullish(),
   crmLeadId: uuid.nullish(),
 })
+
+// ─── AI Operator Assistant (V3 Sprint 4 — Priority 4) ──────────────────────
+
+export const operatorAssistActionSchema = z.object({
+  action: z.enum([
+    'customer_summary', 'conversation_summary', 'suggested_whatsapp_reply',
+    'suggested_email', 'recommended_room', 'recommended_package', 'recommended_follow_up',
+  ]),
+  conversationId: uuid.nullish(),
+})

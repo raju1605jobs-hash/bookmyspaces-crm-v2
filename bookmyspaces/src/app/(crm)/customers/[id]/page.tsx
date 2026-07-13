@@ -18,7 +18,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Phone, Mail, Calendar, Users, IndianRupee, MapPin,
   MessageSquare, FileText, Wallet, Bot, Clock, RefreshCw,
-  AlertTriangle, ChevronRight, Tag,
+  AlertTriangle, ChevronRight, Tag, Sparkles, Copy, Check,
 } from 'lucide-react'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,6 +69,22 @@ interface ProposalSummary {
   status: string
   created_at: string
 }
+
+// V3 Sprint 4 — Priority 4: AI Operator Assistant. Mirrors
+// src/lib/ai/operator-assistant.ts's OperatorAssistAction exactly.
+type OperatorAssistAction =
+  | 'customer_summary' | 'conversation_summary' | 'suggested_whatsapp_reply'
+  | 'suggested_email' | 'recommended_room' | 'recommended_package' | 'recommended_follow_up'
+
+const ASSIST_ACTIONS: { action: OperatorAssistAction; label: string }[] = [
+  { action: 'customer_summary', label: 'Customer Summary' },
+  { action: 'conversation_summary', label: 'Conversation Summary' },
+  { action: 'suggested_whatsapp_reply', label: 'Suggested WhatsApp Reply' },
+  { action: 'suggested_email', label: 'Suggested Email' },
+  { action: 'recommended_room', label: 'Recommended Room' },
+  { action: 'recommended_package', label: 'Recommended Package' },
+  { action: 'recommended_follow_up', label: 'Recommended Follow-up' },
+]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -314,6 +330,93 @@ export default function CustomerProfilePage({ params }: { params: { id: string }
           )}
         </div>
       </div>
+
+      {/* ── AI Operator Assistant ───────────────────────────────────────── */}
+      <AIAssistantPanel customerId={params.id} />
+    </div>
+  )
+}
+
+function AIAssistantPanel({ customerId }: { customerId: string }) {
+  const [pendingAction, setPendingAction] = useState<OperatorAssistAction | null>(null)
+  const [result, setResult] = useState<{ action: OperatorAssistAction; text: string } | null>(null)
+  const [assistError, setAssistError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+
+  async function runAssist(action: OperatorAssistAction) {
+    setPendingAction(action)
+    setAssistError(null)
+    setCopied(false)
+    try {
+      const res = await fetch(`/api/customers/${customerId}/ai`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error ?? 'AI assistant request failed')
+      setResult({ action, text: json.text })
+    } catch (err) {
+      setAssistError(err instanceof Error ? err.message : 'AI assistant request failed')
+    } finally {
+      setPendingAction(null)
+    }
+  }
+
+  function handleCopy() {
+    if (!result) return
+    navigator.clipboard?.writeText(result.text).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <h2 className="text-sm font-semibold text-gray-700 mb-1 flex items-center gap-1.5">
+        <Sparkles className="w-4 h-4 text-indigo-500" /> AI Operator Assistant
+      </h2>
+      <p className="text-xs text-gray-400 mb-4">
+        Built from this customer&apos;s real profile, preferences, reservation/proposal history, and recent conversation — the same AI Context Builder every other AI feature in BookMySpaces reads from.
+      </p>
+
+      <div className="flex flex-wrap gap-2">
+        {ASSIST_ACTIONS.map(({ action, label }) => (
+          <button
+            key={action}
+            onClick={() => runAssist(action)}
+            disabled={pendingAction !== null}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200 hover:bg-gray-100 disabled:opacity-50"
+          >
+            {pendingAction === action ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3 text-indigo-400" />}
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {assistError && (
+        <div className="mt-4 flex items-center gap-2 bg-red-50 border border-red-200 rounded-lg px-4 py-3 text-sm text-red-700">
+          <AlertTriangle className="w-4 h-4" /> {assistError}
+        </div>
+      )}
+
+      {result && (
+        <div className="mt-4 bg-indigo-50/50 border border-indigo-100 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-semibold text-indigo-700">
+              {ASSIST_ACTIONS.find((a) => a.action === result.action)?.label}
+            </span>
+            <button
+              onClick={handleCopy}
+              className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-800"
+            >
+              {copied ? <Check className="w-3 h-3 text-green-600" /> : <Copy className="w-3 h-3" />}
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+          <p className="text-sm text-gray-800 whitespace-pre-wrap">{result.text}</p>
+        </div>
+      )}
     </div>
   )
 }
