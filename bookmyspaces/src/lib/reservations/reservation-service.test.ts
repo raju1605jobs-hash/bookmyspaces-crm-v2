@@ -125,6 +125,15 @@ describe('createReservation', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toBe('db_error')
   })
+
+  it('carries proposalId onto the reservation when converting a proposal (Sprint 3)', async () => {
+    state.insertedRow = { ...baseRow, proposal_id: 'proposal-1' }
+
+    const result = await createReservation({ ...baseInput, proposalId: 'proposal-1' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.reservation.proposalId).toBe('proposal-1')
+  })
 })
 
 describe('transitionReservationStatus', () => {

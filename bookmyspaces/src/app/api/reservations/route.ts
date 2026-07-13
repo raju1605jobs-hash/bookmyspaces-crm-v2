@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
       bookingSource: body.bookingSource ?? undefined,
       specialRequests: body.specialRequests ?? null,
       crmLeadId: body.crmLeadId ?? body.customerId ?? null,
+      proposalId: body.proposalId ?? null,
     })
 
     if (!reservationResult.ok) {

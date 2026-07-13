@@ -31,6 +31,8 @@ export interface CreateReservationInput {
   roomCount?: number
   bookingSource?: Reservation['bookingSource']
   specialRequests?: string | null
+  /** Set when this reservation originates from an accepted proposal (Sprint 3 — Convert Proposal -> Reservation). */
+  proposalId?: string | null
 }
 
 export type CreateReservationResult =
@@ -70,6 +72,7 @@ export async function createReservation(input: CreateReservationInput): Promise<
       booking_source: input.bookingSource ?? 'direct',
       status: 'inquiry',
       special_requests: input.specialRequests ?? null,
+      proposal_id: input.proposalId ?? null,
     })
     .select('*')
     .single()

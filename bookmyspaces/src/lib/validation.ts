@@ -134,6 +134,8 @@ export const createReservationSchema = z.object({
   ]).nullish(),
   specialRequests: z.string().trim().max(2000).nullish(),
   crmLeadId      : uuid.nullish(),
+  /** Set when converting an accepted proposal into a reservation (Sprint 3). */
+  proposalId     : uuid.nullish(),
 })
 
 export const reservationStatusActionSchema = z.object({
