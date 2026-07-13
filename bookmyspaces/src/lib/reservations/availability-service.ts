@@ -42,11 +42,20 @@ export async function checkAvailability(
 ): Promise<AvailabilityCheckResult> {
   const supabase = getSupabaseAdmin()
 
+  // Overlap condition (aStart < bEnd && bStart < aEnd, see dateRangesOverlap)
+  // pushed into the query itself via idx_reservations_dates
+  // (supabase/migrations/012_v3_foundation_schema.sql), instead of fetching
+  // every blocking reservation this inventory item has ever had and
+  // filtering in application code. Caught during the Day 2 database review -
+  // the original version scaled with total reservation history per item,
+  // not with the (small) number of actually-conflicting rows.
   let query = supabase
     .from('reservations')
     .select('id, check_in_date, check_out_date')
     .eq('inventory_item_id', inventoryItemId)
     .in('status', BLOCKING_STATUSES)
+    .lt('check_in_date', checkOutDate)
+    .gt('check_out_date', checkInDate)
 
   if (excludeReservationId) {
     query = query.neq('id', excludeReservationId)
@@ -59,6 +68,10 @@ export async function checkAvailability(
     return { available: false, conflictingReservationIds: [] }
   }
 
+  // Re-checked in application code as a defense-in-depth safety net (cheap
+  // now that the SQL query already did the real filtering) - if this ever
+  // disagrees with the query, that's a signal something about the date
+  // comparison assumptions above is wrong, not something to silently trust.
   const conflicts = data.filter((r) => dateRangesOverlap(checkInDate, checkOutDate, r.check_in_date, r.check_out_date))
 
   return {

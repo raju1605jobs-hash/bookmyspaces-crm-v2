@@ -15,9 +15,9 @@ vi.mock('@/lib/supabase', () => ({
       if (table !== 'reservations') throw new Error(`unexpected table: ${table}`)
       return {
         select: (cols: string) => {
-          // availability check path: select(...).eq(...).in(...)
+          // availability check path: select(...).eq(...).in(...).lt(...).gt(...)
           if (cols.includes('check_in_date') && cols.includes('check_out_date') && !cols.includes('status')) {
-            return { eq: () => ({ in: () => Promise.resolve({ data: state.existingReservations, error: null }) }) }
+            return { eq: () => ({ in: () => ({ lt: () => ({ gt: () => Promise.resolve({ data: state.existingReservations, error: null }) }) }) }) }
           }
           // transitionReservationStatus's status lookup: select('status').eq(...).maybeSingle()
           if (cols === 'status') {

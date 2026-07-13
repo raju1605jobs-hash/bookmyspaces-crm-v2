@@ -30,7 +30,11 @@ vi.mock('@/lib/supabase', () => ({
     from: () => ({
       select: () => ({
         eq: () => ({
-          in: () => Promise.resolve({ data: mockReservationsTable.rows, error: null }),
+          in: () => ({
+            lt: () => ({
+              gt: () => Promise.resolve({ data: mockReservationsTable.rows, error: null }),
+            }),
+          }),
         }),
       }),
     }),
