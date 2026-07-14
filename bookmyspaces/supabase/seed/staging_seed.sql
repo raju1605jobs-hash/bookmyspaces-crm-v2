@@ -155,12 +155,12 @@ ON CONFLICT (id) DO NOTHING;
 -- 7. RESERVATION ADD-ONS — airport pickup on PICKUP-001, decoration+photography on EVENT-001
 -- ─────────────────────────────────────────────────────────────────────────
 
-INSERT INTO reservation_addons (id, reservation_id, addon_service_id, quantity, unit_price)
+INSERT INTO reservation_addons (id, reservation_id, addon_service_id, quantity, unit_price, total_price)
 SELECT * FROM (VALUES
-  ('11100000-0000-0000-0000-000000000001'::uuid, 'f0000000-0000-0000-0000-000000000008'::uuid, 'd0000000-0000-0000-0000-000000000001'::uuid, 1, 1200),
-  ('11100000-0000-0000-0000-000000000002'::uuid, 'f0000000-0000-0000-0000-000000000007'::uuid, 'd0000000-0000-0000-0000-000000000003'::uuid, 1, 25000),
-  ('11100000-0000-0000-0000-000000000003'::uuid, 'f0000000-0000-0000-0000-000000000007'::uuid, 'd0000000-0000-0000-0000-000000000004'::uuid, 1, 15000)
-) AS v(id, reservation_id, addon_service_id, quantity, unit_price)
+  ('11100000-0000-0000-0000-000000000001'::uuid, 'f0000000-0000-0000-0000-000000000008'::uuid, 'd0000000-0000-0000-0000-000000000001'::uuid, 1, 1200::numeric, 1200::numeric),
+  ('11100000-0000-0000-0000-000000000002'::uuid, 'f0000000-0000-0000-0000-000000000007'::uuid, 'd0000000-0000-0000-0000-000000000003'::uuid, 1, 25000::numeric, 25000::numeric),
+  ('11100000-0000-0000-0000-000000000003'::uuid, 'f0000000-0000-0000-0000-000000000007'::uuid, 'd0000000-0000-0000-0000-000000000004'::uuid, 1, 15000::numeric, 15000::numeric)
+) AS v(id, reservation_id, addon_service_id, quantity, unit_price, total_price)
 ON CONFLICT (id) DO NOTHING;
 
 -- ─────────────────────────────────────────────────────────────────────────
