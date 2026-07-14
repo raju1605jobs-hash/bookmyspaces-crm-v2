@@ -9,6 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { requireRole } from '@/lib/auth-guard'
+import { logger } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +35,7 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
   try {
     const auth = await requireRole(['admin'])
     if (!auth.ok) return auth.response
+    const { user } = auth
 
     const body = await req.json() as {
       user_id   : string
@@ -49,6 +51,13 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
         .update({ role: body.role, updated_at: new Date().toISOString() })
         .eq('id', body.user_id)
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      // RC1 security fix: role changes and activation/deactivation had no
+      // audit trail at all — a security-sensitive admin action left no
+      // record of who performed it. A dedicated audit_log table is a
+      // schema change out of scope for this pass (see
+      // RELEASE_CANDIDATE_1_REPORT.md); this at minimum makes the action
+      // and actor visible in structured logs immediately.
+      logger.info('admin/users', 'role changed', { actorId: user.id, targetUserId: body.user_id, newRole: body.role })
     }
 
     if (body.action === 'deactivate' || body.action === 'activate') {
@@ -60,6 +69,7 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
         })
         .eq('id', body.user_id)
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      logger.info('admin/users', `user ${body.action}d`, { actorId: user.id, targetUserId: body.user_id })
     }
 
     return NextResponse.json({ success: true })
@@ -112,6 +122,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (profileErr) {
       return NextResponse.json({ error: profileErr.message }, { status: 500 })
     }
+
+    logger.info('admin/users', 'user created', { actorId: user.id, newUserId: authData.user.id, role: body.role })
 
     return NextResponse.json({ success: true, user_id: authData.user.id })
 
