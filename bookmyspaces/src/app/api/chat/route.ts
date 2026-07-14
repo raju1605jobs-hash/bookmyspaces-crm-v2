@@ -288,7 +288,22 @@ async function upsertLead(
     let dupLeadId: string | null = null
     let dupReason = ''
 
-    if (normPhone) {
+    // RC1 perf/correctness fix (flagged as a known risk in
+    // SPRINT5_GO_LIVE_REPORT.md): try a real indexed exact match on the
+    // canonical phone format first. Since Sprint 5's identity-resolution
+    // fix, every NEW lead across every channel (WhatsApp, Excel import,
+    // website chat) is written in this same canonical format, so this
+    // covers the common case with a single indexed lookup instead of an
+    // unbounded-risk scan. The bounded scan below still runs as a fallback
+    // for leads whose phone predates that fix and is in some other format
+    // — it's now a legacy-data safety net, not the primary path.
+    if (canonicalPhone) {
+      const { data: exactMatch } = await supabaseAdmin
+        .from('leads').select('id').eq('phone', canonicalPhone).maybeSingle()
+      if (exactMatch) { dupLeadId = exactMatch.id; dupReason = 'phone_exact' }
+    }
+
+    if (!dupLeadId && normPhone) {
       const { data: phoneRows } = await supabaseAdmin
         .from('leads').select('id, phone').not('phone', 'is', null).limit(500)
       const phoneMatch = (phoneRows ?? []).find((r: any) => normalizePhoneForDedup(r.phone) === normPhone)
