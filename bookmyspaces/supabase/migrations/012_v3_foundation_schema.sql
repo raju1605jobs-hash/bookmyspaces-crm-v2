@@ -518,4 +518,34 @@ CREATE TABLE IF NOT EXISTS ai_interaction_log (
   created_at TIMESTAMPTZ DEFAULT NOW(),
 
   lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES unified_conversations
+  conversation_id UUID REFERENCES unified_conversations(id) ON DELETE SET NULL,
+  interaction_type TEXT CHECK (interaction_type IN (
+    'customer_summary', 'conversation_summary', 'suggested_whatsapp_reply',
+    'suggested_email', 'recommended_room', 'recommended_package', 'recommended_follow_up'
+  )),
+  summary TEXT,
+  confidence_score NUMERIC(4,3),
+  escalated BOOLEAN DEFAULT FALSE,
+  escalation_reason TEXT,
+  response_time_ms INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_interaction_log_lead_id ON ai_interaction_log(lead_id);
+CREATE INDEX IF NOT EXISTS idx_ai_interaction_log_conversation_id ON ai_interaction_log(conversation_id);
+CREATE INDEX IF NOT EXISTS idx_ai_interaction_log_escalated ON ai_interaction_log(escalated);
+
+ALTER TABLE ai_interaction_log ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "ai_interaction_log_service_role_all" ON ai_interaction_log;
+CREATE POLICY "ai_interaction_log_service_role_all" ON ai_interaction_log
+  FOR ALL USING (auth.role() = 'service_role');
+
+-- ─────────────────────────────────────────
+-- SEED: the two known properties, so this migration is immediately usable
+-- rather than leaving `properties` empty. Slugs match what
+-- src/types/reservation.ts's PropertySlug type expects.
+-- ─────────────────────────────────────────
+INSERT INTO properties (name, slug, is_active)
+VALUES
+  ('Skyline Serenity', 'skyline-serenity', TRUE),
+  ('Monurama Homestay', 'monurama-homestay', TRUE)
+ON CONFLICT (slug) DO NOTHING;
