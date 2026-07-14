@@ -5,6 +5,14 @@ import { usePathname } from 'next/navigation'
 
 const links = [
   { href: '/dashboard', label: 'Dashboard' },
+  // Sprint 5 fix: Revenue Dashboard and Operations Dashboard were both
+  // fully built (Sprint 2 and Sprint 4 respectively) but had no path to
+  // them from the persistent nav — each only linked to the *other* one
+  // from its own header, so a receptionist had no way to discover either
+  // screen existed unless they already knew the URL. See
+  // audit/SPRINT5_GO_LIVE_REPORT.md, Priority 7 (Operator Experience).
+  { href: '/dashboard/revenue', label: 'Revenue' },
+  { href: '/dashboard/operations', label: 'Operations' },
   { href: '/customers', label: 'Customers' },
   { href: '/reservations', label: 'Reservations' },
   { href: '/whatsapp', label: 'WhatsApp' },
@@ -21,6 +29,16 @@ export default function CRMLayout({
 }) {
   const pathname = usePathname()
 
+  // Sprint 5 fix: adding /dashboard/revenue and /dashboard/operations
+  // above means their href is now prefixed by the plain "/dashboard"
+  // link's href, so a naive `pathname.startsWith(link.href)` check would
+  // highlight "Dashboard" *and* "Revenue" (or "Operations") at the same
+  // time while on either sub-page. Pick the single longest-matching href
+  // instead, so only the most specific nav item is ever shown active.
+  const activeHref = links
+    .filter((l) => pathname === l.href || pathname.startsWith(`${l.href}/`))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href
+
   return (
     <div className="flex min-h-screen bg-gray-50">
       {/* Sidebar */}
@@ -31,7 +49,7 @@ export default function CRMLayout({
 
         <nav className="space-y-2 flex-1">
           {links.map((link) => {
-            const active = pathname.startsWith(link.href)
+            const active = link.href === activeHref
 
             return (
               <Link
