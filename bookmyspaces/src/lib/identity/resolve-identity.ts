@@ -26,6 +26,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getSupabaseAdmin } from '@/lib/supabase'
+import { normalizePhone } from '@/lib/whatsapp/normalize-phone'
 
 export interface IdentityLookup {
   phone?: string | null
@@ -60,7 +61,14 @@ export interface ResolvedIdentity {
  * possibly-ambiguous match).
  */
 export async function resolveIdentity(lookup: IdentityLookup): Promise<ResolvedIdentity | null> {
-  const phone = lookup.phone?.trim() || null
+  // Normalize to the same canonical, digits-only phone format every write
+  // path now converges on (src/lib/whatsapp/normalize-phone.ts). Without
+  // this, a caller passing "+91 98765 43210" or "9876543210" would never
+  // match a lead already stored as "919876543210" (or vice versa) — an
+  // exact-string match against differently-formatted input, even though
+  // it's the same phone number. Bug found and fixed in Sprint 5 — see
+  // audit/SPRINT5_GO_LIVE_REPORT.md.
+  const phone = lookup.phone?.trim() ? normalizePhone(lookup.phone) : null
   const email = lookup.email?.trim().toLowerCase() || null
 
   if (!phone && !email) return null

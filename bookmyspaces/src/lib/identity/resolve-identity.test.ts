@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockLeadsTable = {
   phoneMatch: null as { id: string; name: string | null; phone: string; email: string | null } | null,
   emailMatches: [] as Array<{ id: string; name: string | null; phone: string | null; email: string }>,
+  lastPhoneEqValue: null as string | null,
 }
 
 vi.mock('@/lib/supabase', () => ({
@@ -18,9 +19,10 @@ vi.mock('@/lib/supabase', () => ({
       if (table !== 'leads') throw new Error(`unexpected table: ${table}`)
       return {
         select: () => ({
-          eq: (_col: string, _val: string) => ({
-            maybeSingle: async () => ({ data: mockLeadsTable.phoneMatch }),
-          }),
+          eq: (_col: string, val: string) => {
+            mockLeadsTable.lastPhoneEqValue = val
+            return { maybeSingle: async () => ({ data: mockLeadsTable.phoneMatch }) }
+          },
           ilike: (_col: string, _val: string) => ({
             order: () => ({
               limit: () => Promise.resolve({ data: mockLeadsTable.emailMatches }),
@@ -38,6 +40,7 @@ describe('resolveIdentity', () => {
   beforeEach(() => {
     mockLeadsTable.phoneMatch = null
     mockLeadsTable.emailMatches = []
+    mockLeadsTable.lastPhoneEqValue = null
   })
 
   it('returns null when no identifiers are given', async () => {
@@ -79,5 +82,27 @@ describe('resolveIdentity', () => {
   it('returns null when neither phone nor email matches anything', async () => {
     const result = await resolveIdentity({ phone: '+910000000000', email: 'nobody@example.com' })
     expect(result).toBeNull()
+  })
+
+  // Sprint 5 — bug fix: resolveIdentity() previously matched on the raw,
+  // untouched input string, so a caller passing "+91 98765 43210" (or a
+  // bare 10-digit "9876543210") would never match a lead already stored
+  // in the canonical digits-only format the WhatsApp webhook writes
+  // ("919876543210"), silently missing an existing customer and risking a
+  // duplicate lead being created downstream. See audit/SPRINT5_GO_LIVE_REPORT.md.
+  it('normalizes a spaced/plus-prefixed phone to the canonical digits-only format before querying', async () => {
+    mockLeadsTable.phoneMatch = { id: 'lead-3', name: 'Aditi', phone: '919876543210', email: null }
+
+    await resolveIdentity({ phone: '+91 98765 43210' })
+
+    expect(mockLeadsTable.lastPhoneEqValue).toBe('919876543210')
+  })
+
+  it('normalizes a bare 10-digit phone (no country code) the same way', async () => {
+    mockLeadsTable.phoneMatch = { id: 'lead-4', name: 'Rohan', phone: '919812345678', email: null }
+
+    await resolveIdentity({ phone: '9812345678' })
+
+    expect(mockLeadsTable.lastPhoneEqValue).toBe('919812345678')
   })
 })

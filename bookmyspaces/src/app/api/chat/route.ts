@@ -22,6 +22,7 @@ import { getSupabaseAdmin } from '@/lib/supabase'
 import { syncLeadToSheets, initializeSheet } from '@/lib/sheets'
 import { logger } from '@/lib/logger'
 import { handleInboundMessage, recordMessage } from '@/lib/conversations/unified-conversation-service'
+import { normalizePhone as normalizePhoneCanonical } from '@/lib/whatsapp/normalize-phone'
 
 export async function POST(req: NextRequest) {
   const supabaseAdmin = getSupabaseAdmin()
@@ -254,9 +255,20 @@ async function upsertLead(
     const guestCount = parseGuestCount(extracted.guest_count)
     const eventDate = parseEventDate(extracted.event_date)
 
+    // Sprint 5 fix: store phone in the same canonical, digits-only format
+    // every other channel (WhatsApp webhook, Excel import) now converges
+    // on, instead of whatever raw shape the AI happened to extract from
+    // free text (e.g. "+91 98765 43210"). The dedup check just below was
+    // already resilient to format differences via normalizePhoneForDedup,
+    // but the *stored* value wasn't — meaning a website-chat lead could
+    // still fail an exact-match lookup from resolveIdentity() or a later
+    // Excel import, even though this function correctly found/updated the
+    // right row itself. See audit/SPRINT5_GO_LIVE_REPORT.md.
+    const canonicalPhone = phone ? normalizePhoneCanonical(phone) : null
+
     const baseFields: Record<string, unknown> = {
       ...(extracted.name && { name: sanitizeString(extracted.name) }),
-      ...(phone && { phone }),
+      ...(canonicalPhone && { phone: canonicalPhone }),
       ...(extracted.email && { email: sanitizeString(extracted.email) }),
       ...(extracted.event_type && { event_type: sanitizeString(extracted.event_type) }),
       ...(guestCount && { guest_count: guestCount }),
@@ -306,7 +318,7 @@ async function upsertLead(
       .from('leads')
       .insert({
         name: sanitizeString(extracted.name),
-        phone: phone || null,
+        phone: canonicalPhone || null,
         email: sanitizeString(extracted.email),
         event_type: sanitizeString(extracted.event_type),
         guest_count: guestCount,

@@ -3,6 +3,7 @@
 // Uses xlsx library (add: npm install xlsx)
 
 import * as XLSX from 'xlsx';
+import { normalizePhone as normalizePhoneCanonical } from '@/lib/whatsapp/normalize-phone';
 
 export interface RawLeadRow {
   name?: string;
@@ -29,13 +30,18 @@ export interface ParseResult {
   totalRows: number;
 }
 
-// Normalize phone: strip spaces, dashes, ensure +91 for Indian numbers
+// Normalize phone to the same canonical, digits-only format every other
+// channel converges on (e.g. "919051459463" — see
+// src/lib/whatsapp/normalize-phone.ts, which is what the WhatsApp webhook
+// already writes verbatim to leads.phone). This used to independently
+// normalize to a "+91XXXXXXXXXX" format that never matched a lead created
+// via WhatsApp (stored without a "+"), which meant a customer imported via
+// Excel who later messaged on WhatsApp got a silent duplicate lead record
+// instead of being recognized as the same person. Fixed in Sprint 5 — see
+// audit/SPRINT5_GO_LIVE_REPORT.md, Priority 2/3, "Identity Resolution:
+// inconsistent phone formats across channels".
 function normalizePhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 10) return `+91${digits}`;
-  if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
-  if (digits.length === 13 && raw.startsWith('+')) return raw.replace(/\s/g, '');
-  return raw.trim();
+  return normalizePhoneCanonical(raw);
 }
 
 function isValidPhone(phone: string): boolean {
