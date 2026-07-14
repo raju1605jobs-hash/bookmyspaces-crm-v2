@@ -27,6 +27,27 @@ function modeLabel(mode: string): string {
   return map[mode] ?? mode
 }
 
+// SECURITY: this route returns a raw HTML string as text/html, built from
+// proposal/payment fields that ultimately trace back to customer- or
+// staff-entered text (client name, room type, add-on name, receipt
+// reference, notes). This route sits behind requireAuth(), but an
+// authenticated staff session is still worth protecting — a malicious lead
+// name injected via an unauthenticated channel (WhatsApp/website chat) and
+// later copied into a proposal could otherwise execute in a logged-in
+// staff member's browser. Escaped consistently with the same fix applied
+// to src/lib/proposal-pdf.ts (the public, unauthenticated proposal
+// preview/PDF route) during Version 1.0 release preparation — see
+// RELEASE_MANAGER_REPORT.md.
+function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 // ─── Amount in words ──────────────────────────────────────────────────────────
 
 function amountInWords(amount: number): string {
@@ -72,9 +93,18 @@ function buildInvoiceHTML(proposal: any, invoice: any, payments: any[]): string 
   const totalWords  = amountInWords(totalPrice)
   const paidTotal   = advancePaid  // same value — reuse, no second reduce
 
+  const clientName  = escapeHtml(proposal.client_name)
+  const clientPhone = escapeHtml(proposal.client_phone)
+  const clientEmail = escapeHtml(proposal.client_email)
+  const packageName = escapeHtml(proposal.package_name)
+  const venueName   = escapeHtml(proposal.venue)
+  const eventType   = escapeHtml(proposal.event_type)
+  const proposalNumber = escapeHtml(proposal.proposal_number)
+  const invoiceNumber  = escapeHtml(invoice.invoice_number)
+
   const roomRowsHtml = roomItems.map((r: any) => `
     <tr>
-      <td class="td">🛏 ${r.room_type}</td>
+      <td class="td">🛏 ${escapeHtml(r.room_type)}</td>
       <td class="td c">${r.quantity} × ${r.nights} night${r.nights>1?'s':''}</td>
       <td class="td r">${inr(r.rate)} / night</td>
       <td class="td r b">${inr(r.quantity*r.rate*r.nights)}</td>
@@ -82,7 +112,7 @@ function buildInvoiceHTML(proposal: any, invoice: any, payments: any[]): string 
 
   const addonRowsHtml = addons.map((a: any) => `
     <tr>
-      <td class="td">+ ${a.name}</td>
+      <td class="td">+ ${escapeHtml(a.name)}</td>
       <td class="td c">—</td>
       <td class="td r">—</td>
       <td class="td r b">${inr(Number(a.price||0))}</td>
@@ -90,10 +120,10 @@ function buildInvoiceHTML(proposal: any, invoice: any, payments: any[]): string 
 
   const paymentRowsHtml = payments.map((p: any) => `
     <tr>
-      <td class="td mono">${p.receipt_number || '—'}</td>
+      <td class="td mono">${escapeHtml(p.receipt_number) || '—'}</td>
       <td class="td">${fmtDate(p.payment_date)}</td>
       <td class="td" style="text-transform:capitalize">${modeLabel(p.payment_mode||'')}</td>
-      ${p.transaction_ref ? `<td class="td mono small">${p.transaction_ref}</td>` : '<td class="td" style="color:#aaa">—</td>'}
+      ${p.transaction_ref ? `<td class="td mono small">${escapeHtml(p.transaction_ref)}</td>` : '<td class="td" style="color:#aaa">—</td>'}
       <td class="td r b">${inr(Number(p.amount))}</td>
     </tr>`).join('')
 
@@ -102,7 +132,7 @@ function buildInvoiceHTML(proposal: any, invoice: any, payments: any[]): string 
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Invoice ${invoice.invoice_number} — BookMySpaces</title>
+<title>Invoice ${invoiceNumber} — BookMySpaces</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap');
 *{margin:0;padding:0;box-sizing:border-box}
@@ -212,7 +242,7 @@ table{width:100%;border-collapse:collapse}
   </div>
   <div class="inv-meta">
     <div class="inv-type">Tax Invoice</div>
-    <div class="inv-number">${invoice.invoice_number}</div>
+    <div class="inv-number">${invoiceNumber}</div>
     <div class="inv-date">${today}</div>
   </div>
 </div>
@@ -236,11 +266,11 @@ table{width:100%;border-collapse:collapse}
   </div>
   <div>
     <div class="party-label">Billed To</div>
-    <div class="party-name">${proposal.client_name}</div>
+    <div class="party-name">${clientName}</div>
     <div class="party-detail">
-      ${proposal.client_phone || ''}
-      ${proposal.client_phone && proposal.client_email ? '<br>' : ''}
-      ${proposal.client_email || ''}
+      ${clientPhone}
+      ${clientPhone && clientEmail ? '<br>' : ''}
+      ${clientEmail}
     </div>
   </div>
 </div>
@@ -251,11 +281,11 @@ table{width:100%;border-collapse:collapse}
   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px">
     <div style="background:#f8f5f0;border-radius:7px;padding:7px 10px;border-left:2px solid #c9a84c">
       <div style="font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#8a8a9a;margin-bottom:2px">Proposal #</div>
-      <div style="font-size:11px;font-weight:600">${proposal.proposal_number}</div>
+      <div style="font-size:11px;font-weight:600">${proposalNumber}</div>
     </div>
     <div style="background:#f8f5f0;border-radius:7px;padding:7px 10px;border-left:2px solid #c9a84c">
       <div style="font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#8a8a9a;margin-bottom:2px">Event</div>
-      <div style="font-size:11px;font-weight:600">${proposal.event_type || '—'}</div>
+      <div style="font-size:11px;font-weight:600">${eventType || '—'}</div>
     </div>
     <div style="background:#f8f5f0;border-radius:7px;padding:7px 10px;border-left:2px solid #c9a84c">
       <div style="font-size:8px;text-transform:uppercase;letter-spacing:.12em;color:#8a8a9a;margin-bottom:2px">Event Date</div>
@@ -278,8 +308,8 @@ ${hasEvent ? `
     </thead>
     <tbody>
       <tr>
-        <td class="td">${proposal.package_name || 'Event Package'}</td>
-        <td class="td c">${proposal.venue || '—'}</td>
+        <td class="td">${packageName || 'Event Package'}</td>
+        <td class="td c">${venueName || '—'}</td>
         <td class="td r b">${inr(basePrice)}</td>
       </tr>
       ${addonRowsHtml}
@@ -347,7 +377,7 @@ ${hasRooms ? `
         <span class="pay-instr-key">Phone / WhatsApp</span>
         <span class="pay-instr-value">9051459463</span>
       </div>
-      <div class="pay-instr-note">Please quote Invoice No. ${invoice.invoice_number} when making payment.</div>
+      <div class="pay-instr-note">Please quote Invoice No. ${invoiceNumber} when making payment.</div>
     </div>
   </div>
 
@@ -405,7 +435,7 @@ ${payments.length>0 ? `
   <div class="closing-text">
     <strong style="color:#6a6a7a">Digitally Generated Invoice</strong> — This document is valid without a physical signature.
   </div>
-  <div class="closing-ref">Invoice: ${invoice.invoice_number} · Proposal: ${proposal.proposal_number}</div>
+  <div class="closing-ref">Invoice: ${invoiceNumber} · Proposal: ${proposalNumber}</div>
 </div>
 
 </div>

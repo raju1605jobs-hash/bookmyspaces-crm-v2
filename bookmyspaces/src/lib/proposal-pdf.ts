@@ -23,16 +23,41 @@ export interface ProposalRenderData extends Record<string, any> {
   room_items?       : RoomLineItem[]
 }
 
+// ─── HTML escaping ─────────────────────────────────────────────────────────────
+// SECURITY: this file builds a raw HTML string served directly as
+// text/html by two routes — /api/proposals/[id]/preview and
+// /api/proposals/[id]/pdf — and /preview in particular has no auth guard
+// (deliberately public, per RC1's audit of route callers). Every field
+// below that ultimately traces back to customer- or staff-entered text
+// (client name/phone, event type, special requirements, room/add-on/
+// package names, discount reason, inclusions, the AI cover note) is
+// escaped before interpolation, closing a real stored-XSS path: a lead's
+// name is customer-controllable from the moment it's captured via
+// WhatsApp/website chat, and proposal fields are frequently copied
+// straight from lead data. Found and fixed during Version 1.0 release
+// preparation — see RELEASE_MANAGER_REPORT.md.
+function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return ''
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 // ─── Field normalisation ──────────────────────────────────────────────────────
 // Handles both ProposalData interface fields AND raw DB column names.
-// This is the single source of truth for field mapping.
+// This is the single source of truth for field mapping. Every string field
+// that will end up rendered as HTML text is escaped here, once, so callers
+// never have to remember to do it themselves.
 
 function normalise(p: any) {
   const roomItems: RoomLineItem[] = Array.isArray(p.room_items)
     ? p.room_items
         .filter((r: any) => r.room_type && Number(r.rate) > 0)
         .map((r: any) => ({
-          room_type : String(r.room_type),
+          room_type : escapeHtml(String(r.room_type)),
           quantity  : Number(r.quantity) || 1,
           rate      : Number(r.rate),
           nights    : Number(r.nights) || 1,
@@ -46,7 +71,9 @@ function normalise(p: any) {
   const basePrice: number = Number(p.base_price ?? p.subtotal ?? 0)
 
   const addons: Array<{ name: string; price: number }> =
-    Array.isArray(p.addons) ? p.addons : []
+    Array.isArray(p.addons)
+      ? p.addons.map((a: any) => ({ name: escapeHtml(a?.name), price: Number(a?.price) || 0 }))
+      : []
 
   const addonsTotal = addons.reduce((s: number, a: any) => s + Number(a.price ?? 0), 0)
 
@@ -62,8 +89,8 @@ function normalise(p: any) {
     p.advance_required ?? p.advance_amount ?? Math.round(totalPrice * 0.5)
   )
 
-  const packageName: string = String(p.package_name ?? p.package ?? '')
-  const venueName: string   = String(p.venue ?? p.venue_name ?? 'BookMySpaces')
+  const packageName: string = escapeHtml(String(p.package_name ?? p.package ?? ''))
+  const venueName: string   = escapeHtml(String(p.venue ?? p.venue_name ?? 'BookMySpaces'))
 
   const hasEvent  = basePrice > 0 || (packageName.length > 0 && packageName !== 'Rooms Only')
   const hasRooms  = roomItems.length > 0
@@ -181,10 +208,18 @@ export function generateProposalHTML(
 
   const today     = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
   const validTill = validUntil((proposal as any).created_at)
-  const propNum   = String((proposal as any).proposal_number || 'DRAFT')
+  const propNum   = escapeHtml(String((proposal as any).proposal_number || 'DRAFT'))
   const balance   = totalPrice - advanceRequired
-  const coverNote = sanitiseCoverNote((proposal as any).ai_cover_note, proposal.client_name, proposal.event_type)
-  const clientSal = salutation(proposal.client_name)
+  const coverNote = escapeHtml(sanitiseCoverNote((proposal as any).ai_cover_note, proposal.client_name, proposal.event_type))
+  const clientSal = escapeHtml(salutation(proposal.client_name))
+  const clientName = escapeHtml(proposal.client_name)
+  const clientPhone = escapeHtml(proposal.client_phone)
+  const eventType = escapeHtml(proposal.event_type)
+  const eventTime = escapeHtml((proposal as any).event_time)
+  const specialRequirements = escapeHtml(proposal.special_requirements)
+  const discountReason = escapeHtml((proposal as any).discount_reason)
+  const inclusionsList: string[] = (hasEvent ? (proposal.inclusions || defaultInclusions(packageName)) : [])
+    .map((i: string) => escapeHtml(i))
 
   // ── Accommodation table rows ───────────────────────────────────────────
   const accomRowsHtml = roomItems.map(r => `
@@ -218,16 +253,13 @@ export function generateProposalHTML(
       </tr>` : '',
     discountAmt > 0 ? `
       <tr>
-        <td style="padding:4px 0;color:#16a34a;font-size:12px">Discount${proposal.discount_reason ? ` (${proposal.discount_reason})` : ''}</td>
+        <td style="padding:4px 0;color:#16a34a;font-size:12px">Discount${discountReason ? ` (${discountReason})` : ''}</td>
         <td style="padding:4px 0;text-align:right;color:#16a34a;font-size:12px">− ${inr(discountAmt)}</td>
       </tr>` : '',
   ].filter(Boolean).join('')
 
   // ── Inclusions list ────────────────────────────────────────────────────
-  const inclusions  = hasEvent
-    ? (proposal.inclusions || defaultInclusions(packageName))
-    : []
-  const inclusionsHtml = inclusions.map((i: string) => `<li>${i}</li>`).join('')
+  const inclusionsHtml = inclusionsList.map((i: string) => `<li>${i}</li>`).join('')
 
   // ── Concierge items ────────────────────────────────────────────────────
   // If rooms are already booked, show "Additional Room Nights" instead of generic entry
@@ -408,7 +440,7 @@ body{font-family:'DM Sans',system-ui,sans-serif;color:#1a1a1a;background:#fff;fo
   <div class="header-for">Prepared Exclusively For</div>
   <div class="header-client-name">${clientSal}</div>
   <div class="header-event-line">${[
-    proposal.event_type,
+    eventType,
     fmtDate(proposal.event_date)
   ].filter(Boolean).join(' · ')}</div>
 </div>
@@ -426,26 +458,26 @@ body{font-family:'DM Sans',system-ui,sans-serif;color:#1a1a1a;background:#fff;fo
   <div class="details-grid">
     <div class="detail-item">
       <div class="detail-label">Client</div>
-      <div class="detail-value">${proposal.client_name}</div>
+      <div class="detail-value">${clientName}</div>
     </div>
-    ${proposal.client_phone ? `
+    ${clientPhone ? `
     <div class="detail-item">
       <div class="detail-label">Contact</div>
-      <div class="detail-value">${proposal.client_phone}</div>
+      <div class="detail-value">${clientPhone}</div>
     </div>` : ''}
     <div class="detail-item">
       <div class="detail-label">Event Type</div>
-      <div class="detail-value">${proposal.event_type}</div>
+      <div class="detail-value">${eventType}</div>
     </div>
     ${proposal.event_date ? `
     <div class="detail-item">
       <div class="detail-label">Date</div>
       <div class="detail-value">${fmtDate(proposal.event_date)}</div>
     </div>` : ''}
-    ${(proposal as any).event_time ? `
+    ${eventTime ? `
     <div class="detail-item">
       <div class="detail-label">Time</div>
-      <div class="detail-value">${(proposal as any).event_time}</div>
+      <div class="detail-value">${eventTime}</div>
     </div>` : ''}
     ${proposal.guest_count ? `
     <div class="detail-item">
@@ -509,14 +541,14 @@ ${hasEvent && inclusionsHtml ? `
 <div class="section">
   <div class="section-label">What's Included</div>
   <ul class="inclusions-list">${inclusionsHtml}</ul>
-  ${proposal.special_requirements ? `
+  ${specialRequirements ? `
   <div class="req-box">
-    <span style="font-size:8.5px;text-transform:uppercase;letter-spacing:.14em;color:#c9a84c;font-weight:600">Special Requirements · </span>${proposal.special_requirements}
+    <span style="font-size:8.5px;text-transform:uppercase;letter-spacing:.14em;color:#c9a84c;font-weight:600">Special Requirements · </span>${specialRequirements}
   </div>` : ''}
-</div>` : proposal.special_requirements ? `
+</div>` : specialRequirements ? `
 <div class="section">
   <div class="section-label">Special Requirements</div>
-  <div class="req-box">${proposal.special_requirements}</div>
+  <div class="req-box">${specialRequirements}</div>
 </div>` : ''}
 
 <!-- ═══ CONCIERGE SERVICES ═══ -->
