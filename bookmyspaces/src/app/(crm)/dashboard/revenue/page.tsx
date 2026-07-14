@@ -211,11 +211,13 @@ export default function RevenueDashboardPage() {
               <KpiCard
                 label="Bookings"
                 value={String(data?.bookings.total ?? '—')}
+                sub={data?.bookings.degraded ? 'Reservation platform not live yet' : undefined}
                 color="border-l-violet-400"
               />
               <KpiCard
                 label="Confirmed"
                 value={String(data?.bookings.confirmed ?? '—')}
+                sub={data?.bookings.degraded ? 'Reservation platform not live yet' : undefined}
                 color="border-l-violet-500"
               />
             </>
