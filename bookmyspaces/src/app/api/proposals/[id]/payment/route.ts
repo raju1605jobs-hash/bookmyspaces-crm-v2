@@ -59,10 +59,18 @@ export async function POST(
 
     if (payErr) throw payErr
 
-    // Mark proposal as accepted if it isn't already
+    // Mark proposal as accepted if it isn't already. Must set accepted_at here
+    // too, not just status: the Revenue Dashboard's revenue totals and
+    // "accepted" proposal count (src/app/api/dashboard/revenue/route.ts) are
+    // keyed strictly on accepted_at IS NOT NULL, matching the explicit
+    // "Mark as Accepted" action in src/app/(crm)/proposals/page.tsx
+    // (handleStatusUpdate). Without this, a proposal transitioned to
+    // 'accepted' via this path alone (e.g. a direct API call, bypassing the
+    // UI's isAccepted-gated Record Payment button) would silently never
+    // appear in revenue figures despite real money being recorded against it.
     await supabase
       .from('proposals')
-      .update({ status: 'accepted' })
+      .update({ status: 'accepted', accepted_at: new Date().toISOString() })
       .eq('id', params.id)
       .in('status', ['draft', 'sent', 'viewed', 'generated'])
 
